@@ -9,6 +9,8 @@ public record TectonicsConfig(
         double oceanCrustKm,
         double continentThresholdKm,
         double buoyantCrustKm,
+        double accretedSedimentFraction,
+        double subductionErosionKm3PerKmMyr,
         double referenceContinentKm,
         double maxCrustKm,
         double erosionTimescaleMyr,
@@ -81,7 +83,9 @@ public record TectonicsConfig(
         return new TectonicsConfig(
                 7.0,     // oceanCrustKm: new crust at ridges
                 20.0,    // continentThresholdKm: thicker crust becomes continental
-                15.0,    // buoyantCrustKm: thicker crust (arcs, oceanic plateaus) jams trenches instead of sinking
+                15.0,    // buoyantCrustKm: thicker crystalline crust (arcs, oceanic plateaus) jams trenches instead of sinking
+                0.5,     // accretedSedimentFraction: sediment scraped off a sinking plate into the trench's wedge
+                35.0,    // subductionErosionKm3PerKmMyr: forearc crust dragged down (Earth ~1.4 km3/yr over ~40,000 km)
                 35.0,    // referenceContinentKm: erosion relaxes thick crust toward this
                 88.0,    // maxCrustKm: safety cap (thickest crust on Earth is ~80 km)
                 200.0,   // erosionTimescaleMyr

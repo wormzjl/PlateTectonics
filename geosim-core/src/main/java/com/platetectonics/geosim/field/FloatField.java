@@ -16,6 +16,11 @@ public final class FloatField {
         return grid;
     }
 
+    /** The backing array (row-major), for tight loops. */
+    public float[] data() {
+        return data;
+    }
+
     public float get(int index) {
         return data[index];
     }

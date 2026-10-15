@@ -48,7 +48,32 @@ final class PlateMotion {
                 L.oceanAge[idx] += (float) subDt;
             }
         }
+        erodeForearcs(sim, subDt);
         growArcs(sim, subDt, now);
+    }
+
+    /**
+     * Subduction erosion: the sinking slab scrapes crust off the base and front of the overriding plate
+     * and carries it down (von Huene &amp; Scholl 1991). On Earth it removes about as much crust as
+     * sediment subduction, together roughly what arcs add, which keeps continental volume near steady.
+     * The rate is per km of trench, so the volume does not depend on the cell size.
+     */
+    private static void erodeForearcs(PlateSimulation sim, double subDt) {
+        Lithosphere L = sim.lith;
+        TectonicsConfig cfg = sim.cfg;
+        double cellKm = sim.grid.cellKm();
+        float rate = (float) (cfg.subductionErosionKm3PerKmMyr() * cellKm / sim.grid.cellAreaKm2() * subDt);
+        float floor = (float) cfg.oceanCrustKm();
+        for (int k = 0; k < sim.trenchCount; k++) {
+            int t = sim.trench[k];
+            float removed = Math.min(rate, L.thick[t] - floor);
+            if (removed <= 0f) {
+                continue;
+            }
+            L.thick[t] -= removed;
+            L.sediment[t] = Math.min(L.sediment[t], L.thick[t]);
+            sim.budgetForearc += removed;
+        }
     }
 
     /** Back cell {@code t} is already occupied; front cell {@code idx} moves onto it. */
@@ -99,10 +124,16 @@ final class PlateMotion {
             incomingSubducts = sim.polarity.sinking(pa, pb, L.oceanAge2[t], L.oceanAge[idx], sim.stepIndex) == pb;
         }
         double ocean = cfg.oceanCrustKm();
-        sim.budgetSubducted += Math.max(0.0, (incomingSubducts ? L.thick[idx] : L.thick2[t]) - ocean);
+        float sinkingSediment = incomingSubducts ? L.sediment[idx] : L.sediment2[t];
+        float sinkingThick = incomingSubducts ? L.thick[idx] : L.thick2[t];
         if (!incomingSubducts) {
             L.copyToBack(idx, t);
         }
+        // part of the sediment on the sinking plate is scraped off into an accretionary wedge
+        float wedge = (float) (cfg.accretedSedimentFraction() * sinkingSediment);
+        L.thick2[t] += wedge;
+        L.sediment2[t] += wedge;
+        sim.budgetSubducted += Math.max(0.0, sinkingThick - wedge - ocean);
         L.marks2[t] |= Lithosphere.MARK_TRENCH;
         sim.addTrench(t);
         sim.subductedCells++;
@@ -310,6 +341,10 @@ final class PlateMotion {
         L.marks2[idx] = Lithosphere.MARK_RIDGE;
         L.keel2[idx] = 0f;
         L.eclogite2[idx] = 0f;
+        L.sediment2[idx] = 0f;
+        L.regolith2[idx] = 0f;
+        L.exhumed2[idx] = 0f;
+        L.lastGlaciated2[idx] = -1f;
     }
 
     /**

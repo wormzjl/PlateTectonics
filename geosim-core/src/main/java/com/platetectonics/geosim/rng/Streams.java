@@ -15,6 +15,12 @@ public final class Streams {
     public static final long DELAMINATION = 34;
     /** Wet or dry lower crust per crustal terrane (keyed by formation time). */
     public static final long ECLOGITE = 35;
+    /** Box-model constants drawn once per world (Sun, mantle, thresholds). */
+    public static final long HISTORY = 40;
+    /** Waiting times of life and atmosphere milestones. */
+    public static final long MILESTONES = 41;
+    /** Snowball onset thresholds and durations. */
+    public static final long SNOWBALL = 42;
 
     private Streams() {
     }

@@ -18,21 +18,32 @@ A world with T < 1,000 Myr runs at full detail throughout. Total steps stay at o
 
 ## Order of operations in one step
 
+As built in Phase 3 (`PlanetSimulation.step`):
+
 ```
- 1. Global state      box models: mantle temperature, Sun, CO2, O2, life milestones   → 07
- 2. Mantle            plume and upwelling field; plume-head arrivals (LIPs)           → 03
- 3. Plate velocities  force/torque balance per plate                                  → 03
- 4. Plate motion      move plates rigidly; compose the world raster                   → 03
- 5. Boundaries        subduction, collision, rifting, ridges, transforms; reorganize  → 03
- 6. Magmatism         arcs, hotspots, LIPs, rift volcanics, intrusions (event log)    → 03, 05
- 7. Isostasy          elevation from crust thickness, density and ocean age           → 03
- 8. Sea level         fill the ocean to its water volume (hypsometry)                 → 04
- 9. Climate           temperature, wind, precipitation, ice (every N steps)           → 04
-10. Surface processes rivers, erosion, transport, deposition, glaciers, weathering    → 04
-11. Columns           append deposits, remove eroded tops, update burial and Tmax     → 05
-12. Resources         score triggered families; instantiate deposits; preservation    → 06
-13. Snapshot          downsampled frame for the preview timeline (every ~10–50 Myr)
+ 1. Global state      box models: Sun, mantle, degassing, O2, CO2 and temperature,
+                      life milestones (from the planet of the previous step)           → 07
+ 2. Plates            sea level; velocities (force balance); motion; subduction,
+                      collision, ridges; subduction erosion; arcs; underthrusting,
+                      crustal flow, roots; plumes, rifts, reorganization                → 03
+ 3. Sea level         fill the ocean to its water volume (hypsometry)                  → 04
+ 4. Climate           temperature, wind, precipitation, ice, land weathering strength  → 04
+ 5. Surface processes flow, erosion, transport, deposition, sea floor, regolith        → 04
+ 6. Sea level         again, with the water held in ice taken out of the ocean         → 04
+    -- not built yet --
+ 7. Columns           append deposits, remove eroded tops, update burial and Tmax      → 05
+ 8. Resources         score triggered families; instantiate deposits; preservation     → 06
+ 9. Snapshot          downsampled frame for the preview timeline (every ~10–50 Myr)
 ```
+
+**Couplings.** Each part reads what the others produced in the step before, so the loops close without iterating within a step:
+
+- the box models read the previous step's new ocean floor (spreading) and plume heads, the climate's land weathering strength and land fraction, and the mean land erosion rate;
+- the climate reads this step's global temperature and the previous step's erosion map (fresh rock weathers faster);
+- erosion, deposition and weathering read this step's climate and the life milestones (vegetation, carbonate producers);
+- ice lowers sea level, which the next step's plates and climate see.
+
+Elevation is never stored; isostasy gives it whenever a part asks ([03](03-tectonics.md#isostasy-and-elevation)). The CLI flag `--plates-only` runs steps 1–2 alone, with the Phase 2 erosion stand-in and no climate or surface processes.
 
 ## State
 
@@ -56,7 +67,7 @@ A world with T < 1,000 Myr runs at full detail throughout. Total steps stay at o
 
 **Per plate:** id, rigid transform (x, z, θ), velocity (vx, vz, ω), local raster, area, continental fraction, age, parent/child ids for splits and merges.
 
-**Global** (`WorldHistory.globalState(t)`): mantle potential temperature, solar luminosity, pCO₂, O₂ state, ocean redox, sea level, global mean temperature, seawater-chemistry toggle, biological flags. Owned by [07](07-life-atmosphere-sun.md); read by every deposit rule ([06](06-resources.md)).
+**Global** (a `GlobalState` per step, from `WorldHistory.state()`): mantle potential temperature, solar luminosity, degassing, global mean temperature, pCO₂, O₂ level and state, organic burial, methane warming, snowball flag, milestone times. Sea level lives in the plate simulation. Ocean redox and the seawater-chemistry toggle are planned with the resource rules. Owned by [07](07-life-atmosphere-sun.md); read by every deposit rule ([06](06-resources.md)).
 
 **Event log:** append-only records `(type, t, location or segment, parameters)` for subduction segments (rate, obliquity, slab age), collisions, rifts, ridge segments, plume arrivals, LIPs, intrusions, glaciations, oxygenation steps and extinctions. Deposit generators trigger on these events.
 

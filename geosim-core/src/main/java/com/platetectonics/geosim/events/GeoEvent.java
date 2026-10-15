@@ -25,6 +25,14 @@ public record GeoEvent(Type type, double timeMyr, int cell, int plateA, int plat
         /** The largest plate breaks up because too few plates remain. */
         BREAKUP,
         /** Dense lithospheric root drops off beneath thickened crust. */
-        DELAMINATION
+        DELAMINATION,
+        /** A life or atmosphere milestone is reached; value = milestone ordinal. */
+        MILESTONE,
+        /** Global glaciation begins (value = duration, Myr). */
+        SNOWBALL_START,
+        /** Global glaciation ends in a hothouse. */
+        SNOWBALL_END,
+        /** Atmospheric oxygen changes state (value = new OxygenState ordinal): GOE, NOE, or a fall back. */
+        OXYGENATION
     }
 }

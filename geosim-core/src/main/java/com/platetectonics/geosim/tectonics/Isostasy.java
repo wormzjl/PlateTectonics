@@ -15,6 +15,10 @@ import com.platetectonics.geosim.terrain.SeaLevel;
 public final class Isostasy {
     /** Airy factor for continental crust: (1 - rho_crust / rho_mantle) with 2.8 / 3.3 g/cm3. */
     public static final double AIRY_FACTOR = 1.0 - 2.8 / 3.3;
+    /** Sediment (2.4 g/cm3) on land: (1 - 2.4 / 3.3). */
+    public static final double SEDIMENT_LAND_FACTOR = 1.0 - 2.4 / 3.3;
+    /** Sediment filling ocean water: (3.3 - 2.4) / (3.3 - 1.03); it fills more than its own thickness' worth. */
+    public static final double SEDIMENT_MARINE_FACTOR = (3.3 - 2.4) / (3.3 - 1.03);
     /** Continental crust of this thickness stands at the datum. */
     public static final double DATUM_CRUST_KM = 33.0;
     public static final double MAX_OCEAN_DEPTH_M = 6_000.0;
@@ -28,17 +32,27 @@ public final class Isostasy {
     }
 
     public static double elevationM(boolean continental, double thicknessKm, double oceanAgeMyr) {
-        return elevationM(continental, thicknessKm, oceanAgeMyr, 0.0);
+        return elevationM(continental, thicknessKm, oceanAgeMyr, 0.0, 0.0);
     }
 
-    /** @param rootPullM how far keel and eclogite hold the surface down (negative: a hot keel pushes up) */
     public static double elevationM(boolean continental, double thicknessKm, double oceanAgeMyr, double rootPullM) {
+        return elevationM(continental, thicknessKm, oceanAgeMyr, rootPullM, 0.0);
+    }
+
+    /**
+     * @param thicknessKm all crust including sediment
+     * @param rootPullM   how far keel and eclogite hold the surface down (negative: a hot keel pushes up)
+     * @param sedimentKm  sedimentary part of the crust
+     */
+    public static double elevationM(boolean continental, double thicknessKm, double oceanAgeMyr, double rootPullM,
+                                    double sedimentKm) {
+        double crystalline = thicknessKm - sedimentKm;
         if (continental) {
-            return AIRY_FACTOR * (thicknessKm - DATUM_CRUST_KM) * 1000.0 - rootPullM;
+            return (AIRY_FACTOR * (crystalline - DATUM_CRUST_KM) + SEDIMENT_LAND_FACTOR * sedimentKm) * 1000.0 - rootPullM;
         }
-        // oceanic plateaus and island arcs: thicker ocean crust floats higher
-        double plateau = Math.max(0.0, thicknessKm - 7.0) * AIRY_FACTOR * 1000.0;
-        return -oceanDepthM(oceanAgeMyr) + plateau - rootPullM;
+        // oceanic plateaus and island arcs: thicker ocean crust floats higher; sediment fills the water
+        double plateau = Math.max(0.0, crystalline - 7.0) * AIRY_FACTOR * 1000.0;
+        return -oceanDepthM(oceanAgeMyr) + plateau + SEDIMENT_MARINE_FACTOR * sedimentKm * 1000.0 - rootPullM;
     }
 
     /** Keel and eclogite pull of one cell, m. */
@@ -50,7 +64,8 @@ public final class Isostasy {
     /** Elevation on the datum for one cell, capped at {@code maxElevationM} above the current sea level. */
     static double elevationM(PlateSimulation sim, int idx) {
         Lithosphere L = sim.lith;
-        double e = elevationM(L.type[idx] == Lithosphere.CONTINENTAL, L.thick[idx], L.oceanAge[idx], rootPullM(sim, idx));
+        double e = elevationM(L.type[idx] == Lithosphere.CONTINENTAL, L.thick[idx], L.oceanAge[idx], rootPullM(sim, idx),
+                L.sediment[idx]);
         return Math.min(e, sim.seaLevelM + sim.cfg.maxElevationM());
     }
 

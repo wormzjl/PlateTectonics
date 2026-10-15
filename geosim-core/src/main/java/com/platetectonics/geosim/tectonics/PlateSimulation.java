@@ -33,6 +33,10 @@ public final class PlateSimulation {
     double meanOceanDepthM = com.platetectonics.geosim.terrain.SeaLevel.EARTH_MEAN_OCEAN_DEPTH_M;
     /** Sea level on the isostatic datum, m, updated at the start of every step. */
     double seaLevelM;
+    /** Water locked in ice sheets, as metres of water over the whole planet (lowers sea level). */
+    double iceWaterEquivalentM;
+    /** Phase 2 erosion stand-in; turned off when real surface processes run. */
+    boolean erosionStandIn = true;
 
     // scratch shared by the motion code
     final int[] queue;
@@ -64,6 +68,7 @@ public final class PlateSimulation {
     double budgetCollision;
     double budgetEclogite;
     double budgetSubducted;
+    double budgetForearc;
 
     public PlateSimulation(CylinderGrid grid, long seed, TectonicsConfig cfg) {
         this.grid = grid;
@@ -208,7 +213,9 @@ public final class PlateSimulation {
         PlateMotion.distributeUnderthrust(this);
         CrustalFlow.relax(this);
         OrogenicRoots.update(this, dtMyr);
-        erodeThickCrust(dtMyr);
+        if (erosionStandIn) {
+            erodeThickCrust(dtMyr);
+        }
         refreshStats();
         PlateReorganizer.reorganize(this, dtMyr);
         time += dtMyr;
@@ -302,7 +309,8 @@ public final class PlateSimulation {
         for (int idx = 0; idx < grid.size(); idx++) {
             e[idx] = (float) Isostasy.elevationM(this, idx);
         }
-        seaLevelM = com.platetectonics.geosim.terrain.SeaLevel.fillToVolume(e, meanOceanDepthM);
+        seaLevelM = com.platetectonics.geosim.terrain.SeaLevel.fillToVolume(e,
+                Math.max(1.0, meanOceanDepthM - iceWaterEquivalentM));
     }
 
     /** Ocean water volume as a mean depth over the whole planet, m (Earth: 2,620). */
@@ -313,6 +321,30 @@ public final class PlateSimulation {
 
     public double seaLevelM() {
         return seaLevelM;
+    }
+
+    public double meanOceanDepthM() {
+        return meanOceanDepthM;
+    }
+
+    /** Turns the Phase 2 erosion stand-in off when real erosion and deposition run instead. */
+    public void setErosionStandIn(boolean on) {
+        this.erosionStandIn = on;
+    }
+
+    /** Recomputes sea level after outside changes to the crust (erosion, deposition, ice). */
+    public void refreshSeaLevel() {
+        updateSeaLevel();
+    }
+
+    /** Water held in ice sheets, m over the whole planet; takes effect at the next sea-level update. */
+    public void setIceWaterEquivalentM(double metres) {
+        this.iceWaterEquivalentM = metres;
+    }
+
+    /** Elevation on the isostatic datum of one cell, m (sea level is {@link #seaLevelM()}). */
+    public double elevationM(int idx) {
+        return Isostasy.elevationM(this, idx);
     }
 
     /**
@@ -451,7 +483,7 @@ public final class PlateSimulation {
     public CrustBudget crustBudget() {
         double s = grid.cellAreaKm2() / 1e9;
         return new CrustBudget(budgetArc * s, budgetShelf * s, budgetErosion * s, budgetCollision * s,
-                budgetEclogite * s, budgetSubducted * s);
+                budgetEclogite * s, budgetSubducted * s, budgetForearc * s);
     }
 
     /**
@@ -461,9 +493,10 @@ public final class PlateSimulation {
      * @param collision crust lost when continents stack (1 - collisionTransfer)
      * @param eclogite  lower crust turned into eclogite keel
      * @param subducted thickened ocean crust (young arcs, plateaus) lost down trenches, beyond normal 7 km crust
+     * @param forearc   crust scraped off overriding plates by subduction erosion
      */
     public record CrustBudget(double arcs, double shelves, double erosion, double collision, double eclogite,
-                              double subducted) {
+                              double subducted, double forearc) {
     }
 
     public StepStats stats() {

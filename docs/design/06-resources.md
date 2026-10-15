@@ -34,7 +34,7 @@ The full per-type catalog is in the report (L2). That includes metamorphic and g
 |---|---|---|
 | 1 Event log | Every step (from [03](03-tectonics.md)) | Subduction segments, collisions, rifts, ridges, plumes and LIPs, basin subsidence, uplift, erosion |
 | 2 Column context | Every step (from [05](05-lithology.md)) | Lithology, redox flags (red bed, black shale, evaporite, carbonate), Tmax, TTI, unconformities |
-| 3 Scorer | Cells and steps where a family's trigger fired | prospectivity = fuzzy AND(source, trigger, pathway, trap) × gates from `WorldHistory.globalState(t)` |
+| 3 Scorer | Cells and steps where a family's trigger fired | prospectivity = fuzzy AND(source, trigger, pathway, trap) × gates from the per-step `GlobalState` |
 | 4 Instantiate | Same | Expected count from density models (e.g. porphyry median 15 per 100,000 km² *exposed*, so about 2.6× more must form). Clustered: province → belt (100s of km) → cluster (5–30 km) → deposit. Size and grade log-normal (top 10% of deposits hold 70–86% of the metal) |
 | 5 Template | Same | Vertical zoning anchored to the paleosurface (e.g. porphyry: sinter 0–0.1 km, lithocap 0–1, ore 1.5–4, pluton 5–15 km) |
 | 6 Preservation | Every step afterwards | Exhumation E since formation: **buried** if E < z_form; **exposed** if z_form ≤ E < z_form + h; **destroyed** if E ≥ z_form + h. Destroyed bodies release resistant minerals to placers. Supergene, laterite and gossan overprints apply while the body is near the surface |

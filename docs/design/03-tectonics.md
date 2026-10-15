@@ -16,7 +16,7 @@
 | Subduction with remembered polarity; buoyant crust jams trenches; arcs; accretion | Back-arc extension, ophiolite obduction, transform-specific features |
 | Collision with underthrusting, plateaus, dense roots, delamination, collapse (below) | Cratons as rigid walls, explicit drips, magma-type outputs per event |
 | Plumes (LIPs), rifts, subduction initiation (margins and old ocean), merges, breakups | Rifts preferring old sutures |
-| Crust growth curve; erosion stand-in with shelf and basin deposits | Real erosion (Phase 3, [04](04-surface-processes.md)) |
+| Crust growth curve; subduction erosion (Phase 3); erosion stand-in, now only for `--plates-only` runs (full runs use [04](04-surface-processes.md)) | — |
 
 ## Proto-terrain (t = 0)
 
@@ -80,9 +80,10 @@ Why Tibet stands ~5 km high and does not sink, and how the model reproduces it (
 
 ## Crust growth
 
-- Continents grow at arcs and by accreting arcs and plateaus. They lose crust when arc crust is subducted before it becomes buoyant, in collisions (10%), to erosion (25% of eroded crust; the rest settles on shelves and in submerged basins) and to delamination.
+- Continents grow at arcs and by accreting arcs and plateaus. They lose crust when arc crust is subducted before it becomes buoyant, in collisions (10%), to delamination, and to **subduction erosion**: the sinking slab drags 35 km³ of the overriding plate's crust down per km of trench per Myr, taken at its trench cell (Earth: ~1.4 km³/yr over ~40,000 km of trench; von Huene & Scholl 1991; D-32). The rate is per km of trench, so the volume does not depend on cell size.
+- Erosion itself conserves mass ([04](04-surface-processes.md)). Sediment that settles on ocean floor stays oceanic and rides to a trench, where 50% is scraped into the overriding plate's wedge and the rest subducts (D-31).
 - **Growth curve.** Arc output is steered toward an Earth-like crustal growth curve: ~70% of today's volume by 1.5 Gyr (zircon-based models, Dhuime et al. 2012), and 14.1 km³ per km² of planet by 4.5 Gyr. The planet's history is chaotic, so without this seeds would differ several-fold in land area. With it they differ in **where** continents are, not **how much** continent there is. The strength is a setting (0 = off).
-- Result at 4.5 Gyr (seeds 42 and 7, 31 km cells): 37–40% of the surface continental, 34–35% land, 11–12 × 10⁹ km³ of continental crust, RMS plate speed ~4 cm/yr, peaks at 6.5 km.
+- Result at 4.5 Gyr (Phase 2, plates only; seeds 42 and 7, 31 km cells): 37–40% of the surface continental, 34–35% land, 11–12 × 10⁹ km³ of continental crust, RMS plate speed ~4 cm/yr, peaks at 6.5 km.
 
 ## Isostasy and elevation
 
@@ -94,7 +95,7 @@ sea level:   the level at which the oceans hold the configured water volume (fas
 
 Planned: rifted-margin thermal subsidence, dynamic topography, flexure near trenches and mountain loads (forebulge, foreland basin).
 
-Until Phase 3, an **erosion stand-in** relaxes crust thicker than 35 km toward 35 km over 200 Myr. 75% of the removed crust settles on the plate's shelves (ocean floor within 150 km of its continent) and fills its submerged continental basins.
+In `--plates-only` runs an **erosion stand-in** relaxes crust thicker than 35 km toward 35 km over 200 Myr. 75% of the removed crust settles on the plate's shelves (ocean floor within 150 km of its continent) and fills its submerged continental basins; the other 25% is lost. Full runs use real erosion and deposition instead ([04](04-surface-processes.md)).
 
 ## References
 
@@ -103,4 +104,5 @@ Until Phase 3, an **erosion stand-in** relaxes crust thicker than 35 km toward 3
 - Forsyth & Uyeda 1975 (driving forces).
 - Parsons & Sclater 1977 (ocean depth vs age).
 - Dhuime et al. 2012 (continental growth curve).
+- von Huene & Scholl 1991; Scholl & von Huene 2007 (subduction erosion and crustal recycling rates).
 - Plateau support: England & Houseman 1989; Molnar et al. 1993; Clark & Royden 2000; Hetényi 2007; Garzione et al. 2017. Full list in the [research notes](../research_notes/Tibetan%20plateau%20support/tibetan_plateau_support.md).

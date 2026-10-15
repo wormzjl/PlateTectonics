@@ -37,6 +37,14 @@ public final class Lithosphere {
     float[] keel;
     /** Eclogitized lower crust, km: still part of {@link #thick}, but denser than the mantle. */
     float[] eclogite;
+    /** Sedimentary cover, km: part of {@link #thick}, lighter and softer than crystalline crust. */
+    float[] sediment;
+    /** Weathered rock (regolith, saprolite) at the surface, m. Not counted in {@link #thick}. */
+    float[] regolith;
+    /** Rock removed by erosion since the crust formed, km (exhumation; drives ore preservation). */
+    float[] exhumed;
+    /** Last time ice covered the cell, Myr; -1 = never. */
+    float[] lastGlaciated;
 
     int[] owner2;
     float[] thick2;
@@ -46,6 +54,10 @@ public final class Lithosphere {
     byte[] marks2;
     float[] keel2;
     float[] eclogite2;
+    float[] sediment2;
+    float[] regolith2;
+    float[] exhumed2;
+    float[] lastGlaciated2;
 
     Lithosphere(CylinderGrid grid) {
         this.grid = grid;
@@ -66,6 +78,16 @@ public final class Lithosphere {
         keel2 = new float[n];
         eclogite = new float[n];
         eclogite2 = new float[n];
+        sediment = new float[n];
+        sediment2 = new float[n];
+        regolith = new float[n];
+        regolith2 = new float[n];
+        exhumed = new float[n];
+        exhumed2 = new float[n];
+        lastGlaciated = new float[n];
+        lastGlaciated2 = new float[n];
+        java.util.Arrays.fill(lastGlaciated, -1f);
+        java.util.Arrays.fill(lastGlaciated2, -1f);
     }
 
     void swap() {
@@ -77,6 +99,10 @@ public final class Lithosphere {
         b = marks; marks = marks2; marks2 = b;
         f = keel; keel = keel2; keel2 = f;
         f = eclogite; eclogite = eclogite2; eclogite2 = f;
+        f = sediment; sediment = sediment2; sediment2 = f;
+        f = regolith; regolith = regolith2; regolith2 = f;
+        f = exhumed; exhumed = exhumed2; exhumed2 = f;
+        f = lastGlaciated; lastGlaciated = lastGlaciated2; lastGlaciated2 = f;
     }
 
     /** Copies front cell {@code from} into back cell {@code to}. */
@@ -89,6 +115,10 @@ public final class Lithosphere {
         marks2[to] = marks[from];
         keel2[to] = keel[from];
         eclogite2[to] = eclogite[from];
+        sediment2[to] = sediment[from];
+        regolith2[to] = regolith[from];
+        exhumed2[to] = exhumed[from];
+        lastGlaciated2[to] = lastGlaciated[from];
     }
 
     public CylinderGrid grid() {
@@ -117,11 +147,12 @@ public final class Lithosphere {
 
     /** Continents, island arcs and oceanic plateaus: too light to subduct. */
     boolean isBuoyant(int index, double buoyantCrustKm) {
-        return type[index] == CONTINENTAL || thick[index] >= buoyantCrustKm;
+        // sediment on ocean floor is scraped off at the trench; only crystalline crust resists subduction
+        return type[index] == CONTINENTAL || thick[index] - sediment[index] >= buoyantCrustKm;
     }
 
     boolean isBuoyantBack(int index, double buoyantCrustKm) {
-        return type2[index] == CONTINENTAL || thick2[index] >= buoyantCrustKm;
+        return type2[index] == CONTINENTAL || thick2[index] - sediment2[index] >= buoyantCrustKm;
     }
 
     public byte marks(int index) {
@@ -134,5 +165,48 @@ public final class Lithosphere {
 
     public float eclogiteKm(int index) {
         return eclogite[index];
+    }
+
+    public float sedimentKm(int index) {
+        return sediment[index];
+    }
+
+    public float regolithM(int index) {
+        return regolith[index];
+    }
+
+    public float exhumedKm(int index) {
+        return exhumed[index];
+    }
+
+    public float lastGlaciatedMyr(int index) {
+        return lastGlaciated[index];
+    }
+
+    /**
+     * Erosion or deposition at the surface, km of rock (negative = removed). Sediment is eroded first;
+     * only basement removed below it counts as exhumation (how deep today's basement surface once lay).
+     */
+    public void changeSurface(int index, float km, boolean depositIsSediment) {
+        if (km >= 0f) {
+            thick[index] += km;
+            if (depositIsSediment) {
+                sediment[index] += km;
+            }
+        } else {
+            float removed = Math.min(-km, thick[index] - 0.1f);
+            float fromSediment = Math.min(removed, sediment[index]);
+            thick[index] -= removed;
+            sediment[index] -= fromSediment;
+            exhumed[index] += removed - fromSediment;
+        }
+    }
+
+    public void setRegolithM(int index, float m) {
+        regolith[index] = m;
+    }
+
+    public void setLastGlaciated(int index, float timeMyr) {
+        lastGlaciated[index] = timeMyr;
     }
 }
