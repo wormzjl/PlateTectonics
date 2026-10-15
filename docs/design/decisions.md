@@ -46,7 +46,15 @@
 | D-18 | **Soil:** our own soil placement from the weathering model, using TFC soil blocks | `SurfaceManager` reuse is unverified | Report D14 |
 | D-19 | **Sea level stays at y = 63**; sea-level change exists only inside the simulated history | TFC hard-codes 63 | Report § blocked |
 | D-20 | **Rivers and volcanoes come from the simulation**, not from TFC's features | TFC's versions are coupled to its region generator | Report § blocked |
+| D-21 | **Plates move over one world raster by whole-cell shifts** (translation only in v1); per-plate rasters and rotation are deferred | Exact copies, no resampling blur, simple and fast; maps show no need for rotation yet | [03](03-tectonics.md#as-built-phase-2-vs-planned) |
+| D-22 | **Subduction polarity is remembered per plate pair; crust ≥ 15 km (arcs, oceanic plateaus) cannot subduct and is accreted** | Without both, ~95% of arc crust went back down flipping trenches and continents never grew | [03](03-tectonics.md#boundary-processes) |
+| D-23 | **Plateau support model** (owner request: "why Tibet didn't sink"): buoyant crust + keel and eclogite roots + random delamination with rebound + underthrust split 35/55/10 + ceiling 5.3 km above sea level with lateral flow + collapse of hot crust when convergence stops. A plateau can stand 0.5–2 km low while a dense root is attached, but never sinks for good | Matches both halves of Tibet at ~5 km and the Andean "stuck low, then pop up" cases | [03](03-tectonics.md#plateaus-and-roots); [research notes](../research_notes/Tibetan%20plateau%20support/tibetan_plateau_support.md) |
+| D-24 | **Arc output follows an Earth-like crustal growth curve** (setting; 0 = off) | Plate histories are chaotic; seeds otherwise differ several-fold in land area | [03](03-tectonics.md#crust-growth) |
+| D-25 | **Every tectonic rule is stated in km and Myr, never in cells** (merge distance, shelf width, arc and underthrust bands, slopes) | Cell-count rules made 15.6 km runs merge plates 5× as often as 78 km runs | Phase 2 benchmark |
+| D-26 | **Sea level is recomputed every step** from the water volume | The plateau ceiling and the elevation cap are measured from sea level | [03](03-tectonics.md#isostasy-and-elevation) |
 
 ## Open
 
-None at the moment. New questions are added here as `O-n`.
+| ID | Question | Options | Recommendation |
+|---|---|---|---|
+| O-6 | **Master grid cell size.** D-3 assumed ≈15.6 km. Phase 2 benchmark (one thread, plates only, 4.5 Gyr): 31.25 km = **~75 s**; 15.625 km = **~7–8 min**. Phases 3+ add climate and erosion on the same grid | (a) 31.25 km default, 15.6 km as a "high detail" option; (b) 15.6 km default; (c) decide after multithreading | (a): a world in about a minute now; revisit after the plate loop is parallel (it is per-cell and partitionable) |

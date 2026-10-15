@@ -2,7 +2,6 @@ package com.platetectonics.geosim;
 
 import com.platetectonics.geosim.field.FloatField;
 import com.platetectonics.geosim.grid.CylinderGrid;
-import com.platetectonics.geosim.terrain.ProtoTerrain;
 import com.platetectonics.geosim.terrain.SeaLevel;
 import com.platetectonics.geosim.world.PlanetSpec;
 import org.junit.jupiter.api.Test;
@@ -53,15 +52,27 @@ class PlanetAndSeaLevelTest {
     }
 
     @Test
-    void protoTerrainIsDeterministicAndHasOceans() {
-        CylinderGrid g = CylinderGrid.forPlanet(40_000.0, 256);
-        FloatField a = ProtoTerrain.generate(g, 12345L);
-        FloatField b = ProtoTerrain.generate(g, 12345L);
-        for (int k = 0; k < g.size(); k++) {
-            assertEquals(a.get(k), b.get(k));
+    void fastFillMatchesExactBisection() {
+        java.util.Random random = new java.util.Random(3);
+        float[] e = new float[20_000];
+        for (int k = 0; k < e.length; k++) {
+            e[k] = (float) (random.nextDouble() * 9_000.0 - 6_000.0);
         }
-        double sea = SeaLevel.fillToVolume(a, SeaLevel.EARTH_MEAN_OCEAN_DEPTH_M);
-        double oceanFraction = a.fractionBelow(sea);
-        assertTrue(oceanFraction > 0.3 && oceanFraction < 0.98, "ocean fraction " + oceanFraction);
+        double fast = SeaLevel.fillToVolume(e, 2620.0);
+        double lo = -6_000;
+        double hi = 6_000;
+        for (int iter = 0; iter < 80; iter++) {
+            double mid = 0.5 * (lo + hi);
+            double sum = 0;
+            for (float v : e) {
+                sum += Math.max(0.0, mid - v);
+            }
+            if (sum / e.length < 2620.0) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        assertEquals(0.5 * (lo + hi), fast, 1.0);
     }
 }

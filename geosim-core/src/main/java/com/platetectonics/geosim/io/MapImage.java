@@ -29,6 +29,10 @@ public final class MapImage {
 
     /** Elevation map with simple hillshading. {@code seaLevelM} is the water surface on the same datum. */
     public static void writeElevation(FloatField elevation, double seaLevelM, Path file) throws IOException {
+        write(renderElevation(elevation, seaLevelM), file);
+    }
+
+    public static BufferedImage renderElevation(FloatField elevation, double seaLevelM) {
         CylinderGrid g = elevation.grid();
         BufferedImage img = new BufferedImage(g.width(), g.height(), BufferedImage.TYPE_INT_RGB);
         double shadeScale = 1.0 / (g.cellKm() * 1000.0);
@@ -49,6 +53,10 @@ public final class MapImage {
                 img.setRGB(i, j, (rgb[0] << 16) | (rgb[1] << 8) | rgb[2]);
             }
         }
+        return img;
+    }
+
+    public static void write(BufferedImage img, Path file) throws IOException {
         Path parent = file.toAbsolutePath().getParent();
         if (parent != null) {
             Files.createDirectories(parent);
@@ -56,7 +64,7 @@ public final class MapImage {
         ImageIO.write(img, "png", file.toFile());
     }
 
-    static int[] ramp(double e) {
+    public static int[] ramp(double e) {
         double[][] r = ELEVATION_RAMP;
         if (e <= r[0][0]) {
             return new int[]{(int) r[0][1], (int) r[0][2], (int) r[0][3]};

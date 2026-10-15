@@ -60,7 +60,8 @@ Chunk generator (NeoForge; TFC adapter)        Tier 2: block-level detail, strat
 | [09-roadmap.md](09-roadmap.md) | L1 | Phases, deliverables and exit criteria |
 | [Research report](../reports/Ore%20deposits%20and%20TFC%20compatibility.md) | L2 | Full deposit catalog, TFC internals, sources |
 | [Research notes](../research_notes/Ore%20deposits%20and%20TFC%20compatibility/) | L2 | Raw, cited notes behind the report |
+| [Tibetan plateau support](../research_notes/Tibetan%20plateau%20support/tibetan_plateau_support.md) | L2 | Why thick crust stays high (roots, delamination, flow, ceiling); model rules R1–R9 behind [03 § plateaus](03-tectonics.md#plateaus-and-roots) |
 
 ## Status
 
-**Phase 1 done** (project setup: `geosim-core`, `geosim-cli`, `mod`; build and tests pass). **Next: Phase 2, the plate engine.** See [09-roadmap.md](09-roadmap.md).
+**Phase 2 core done**: the plate engine builds a 4.5 Gyr planet in ~75 s at 31 km cells, including Tibet-style plateaus that are held up by buoyant crust and lose their dense roots ([03](03-tectonics.md#plateaus-and-roots)). Open: O-6, the master cell size ([decisions](decisions.md#open)). **Next: Phase 3, climate and erosion.** See [09-roadmap.md](09-roadmap.md).
