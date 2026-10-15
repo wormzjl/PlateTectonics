@@ -1,0 +1,16 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
+rootProject.name = 'PlateTectonics'
+
+// geosim-core: the planet simulation, pure Java (no Minecraft). See docs/design/README.md
+// geosim-cli:  command-line runner that writes PNG maps
+// mod:         the NeoForge 1.21.1 mod (compiles geosim-core sources into the mod jar)
+include 'geosim-core', 'geosim-cli', 'mod'

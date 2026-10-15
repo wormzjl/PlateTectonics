@@ -1,0 +1,28 @@
+// Planet simulation core. Pure Java 21, no Minecraft classes, so it can be
+// unit-tested and run from the CLI. The mod compiles these sources directly.
+plugins {
+    id 'java-library'
+}
+
+group = mod_group_id
+version = mod_version
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation platform("org.junit:junit-bom:${junit_version}")
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+}

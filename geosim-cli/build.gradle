@@ -1,0 +1,31 @@
+// Command-line runner: seeds -> PNG maps, timelines and benchmarks.
+plugins {
+    id 'application'
+}
+
+group = mod_group_id
+version = mod_version
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation project(':geosim-core')
+}
+
+application {
+    mainClass = 'com.platetectonics.geosim.cli.Main'
+    applicationDefaultJvmArgs = ['-Xmx4G']
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+// `gradlew :geosim-cli:run --args="--seed 42"` writes maps into <repo>/maps
+tasks.named('run', JavaExec) {
+    workingDir = rootProject.projectDir
+}
