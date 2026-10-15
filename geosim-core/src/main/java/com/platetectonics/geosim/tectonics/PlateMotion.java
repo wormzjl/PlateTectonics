@@ -9,32 +9,66 @@ final class PlateMotion {
     private PlateMotion() {
     }
 
+    /**
+     * Cells move in index order and the first to reach a target cell takes it; later arrivals are
+     * overlaps. To use several threads with the same result, the move runs in four passes: targets
+     * (parallel), claims in index order (one thread, integers only), the bulk copy of first claims
+     * (parallel; most of the work) and then pole losses and overlaps in index order (one thread), so
+     * every shared total, trench and polarity memory is updated in the same order as a plain loop.
+     */
     static void substep(PlateSimulation sim, double subDt, double now) {
         Lithosphere L = sim.lith;
         int w = sim.grid.width();
         int h = sim.grid.height();
         int n = sim.grid.size();
-        java.util.Arrays.fill(L.owner2, -1);
+        int[] target = sim.moveTarget;
+        int[] first = sim.moveFirst;
+        int[] later = sim.moveLater;
         sim.trenchCount = 0;
 
-        for (int idx = 0; idx < n; idx++) {
-            Plate p = sim.plates.get(L.owner[idx]);
-            int i = idx % w;
-            int j = idx / w;
-            int ti = Math.floorMod(i + p.shiftX, w);
-            int tj = j + p.shiftY;
-            if (tj < 0 || tj >= h) {
-                if (L.type[idx] == Lithosphere.CONTINENTAL) {
+        sim.parallel.cells(n, (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                first[idx] = -1;
+                Plate p = sim.plates.get(L.owner[idx]);
+                int i = idx % w;
+                int j = idx / w;
+                int ti = Math.floorMod(i + p.shiftX, w);
+                int tj = j + p.shiftY;
+                if (tj < 0 || tj >= h) {
+                    if (L.type[idx] != Lithosphere.CONTINENTAL) {
+                        target[idx] = -1; // ocean floor pushed past a pole is consumed
+                        continue;
+                    }
                     tj = tj < 0 ? 0 : h - 1; // continents pile up against the pole edge
+                }
+                target[idx] = tj * w + ti;
+            }
+        });
+        int laterCount = 0;
+        for (int idx = 0; idx < n; idx++) {
+            int t = target[idx];
+            if (t >= 0 && first[t] < 0) {
+                first[t] = idx;
+            } else {
+                later[laterCount++] = idx;
+            }
+        }
+        sim.parallel.cells(n, (from, to) -> {
+            for (int t = from; t < to; t++) {
+                int src = first[t];
+                if (src >= 0) {
+                    L.copyToBack(src, t);
                 } else {
-                    sim.poleLostCells++; // ocean floor pushed past a pole is consumed
-                    sim.budgetSubducted += Math.max(0.0, L.thick[idx] - sim.cfg.oceanCrustKm());
-                    continue;
+                    L.owner2[t] = -1;
                 }
             }
-            int t = tj * w + ti;
-            if (L.owner2[t] < 0) {
-                L.copyToBack(idx, t);
+        });
+        for (int k = 0; k < laterCount; k++) {
+            int idx = later[k];
+            int t = target[idx];
+            if (t < 0) {
+                sim.poleLostCells++;
+                sim.budgetSubducted += Math.max(0.0, L.thick[idx] - sim.cfg.oceanCrustKm());
             } else {
                 resolveOverlap(sim, t, idx);
             }
@@ -43,11 +77,14 @@ final class PlateMotion {
         fillGaps(sim, now);
         L.swap();
 
-        for (int idx = 0; idx < n; idx++) {
-            if (L.type[idx] == Lithosphere.OCEANIC) {
-                L.oceanAge[idx] += (float) subDt;
+        float age = (float) subDt;
+        sim.parallel.cells(n, (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                if (L.type[idx] == Lithosphere.OCEANIC) {
+                    L.oceanAge[idx] += age;
+                }
             }
-        }
+        });
         erodeForearcs(sim, subDt);
         growArcs(sim, subDt, now);
     }

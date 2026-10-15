@@ -3,6 +3,7 @@ package com.platetectonics.geosim.tectonics;
 import com.platetectonics.geosim.events.EventLog;
 import com.platetectonics.geosim.grid.CylinderGrid;
 import com.platetectonics.geosim.noise.PeriodicNoise;
+import com.platetectonics.geosim.parallel.Parallel;
 import com.platetectonics.geosim.rng.Rng;
 import com.platetectonics.geosim.rng.Streams;
 
@@ -38,10 +39,17 @@ public final class PlateSimulation {
     /** Phase 2 erosion stand-in; turned off when real surface processes run. */
     boolean erosionStandIn = true;
 
+    /** Worker threads for per-cell loops; results do not depend on the count. */
+    Parallel parallel = Parallel.SERIAL;
+
     // scratch shared by the motion code
     final int[] queue;
     final int[] dist;
     final float[] ceilingScratch;
+    /** Plate motion: where each cell moves (-1: lost at a pole), which cell claims each target first, and the rest. */
+    final int[] moveTarget;
+    final int[] moveFirst;
+    final int[] moveLater;
     private final double[] columnCos;
     private final double[] columnSin;
     int[] trench = new int[1024];
@@ -78,6 +86,9 @@ public final class PlateSimulation {
         this.queue = new int[grid.size()];
         this.dist = new int[grid.size()];
         this.ceilingScratch = new float[grid.size()];
+        this.moveTarget = new int[grid.size()];
+        this.moveFirst = new int[grid.size()];
+        this.moveLater = new int[grid.size()];
         Arrays.fill(dist, -1);
         columnCos = new double[grid.width()];
         columnSin = new double[grid.width()];
@@ -306,9 +317,11 @@ public final class PlateSimulation {
     /** Sea level from the current elevations and water volume (scratch: ceilingScratch). */
     void updateSeaLevel() {
         float[] e = ceilingScratch;
-        for (int idx = 0; idx < grid.size(); idx++) {
-            e[idx] = (float) Isostasy.elevationM(this, idx);
-        }
+        parallel.cells(grid.size(), (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                e[idx] = (float) Isostasy.elevationM(this, idx);
+            }
+        });
         seaLevelM = com.platetectonics.geosim.terrain.SeaLevel.fillToVolume(e,
                 Math.max(1.0, meanOceanDepthM - iceWaterEquivalentM));
     }
@@ -325,6 +338,15 @@ public final class PlateSimulation {
 
     public double meanOceanDepthM() {
         return meanOceanDepthM;
+    }
+
+    /** Worker threads for the per-cell loops (the planet comes out the same for every count). */
+    public void setParallel(Parallel parallel) {
+        this.parallel = parallel;
+    }
+
+    public Parallel parallel() {
+        return parallel;
     }
 
     /** Turns the Phase 2 erosion stand-in off when real erosion and deposition run instead. */

@@ -4,6 +4,7 @@ import com.platetectonics.geosim.climate.Climate;
 import com.platetectonics.geosim.grid.CylinderGrid;
 import com.platetectonics.geosim.history.GlobalState;
 import com.platetectonics.geosim.history.Milestone;
+import com.platetectonics.geosim.parallel.Parallel;
 import com.platetectonics.geosim.tectonics.Isostasy;
 import com.platetectonics.geosim.tectonics.Lithosphere;
 import com.platetectonics.geosim.tectonics.PlateSimulation;
@@ -54,7 +55,10 @@ public final class SurfaceProcesses {
     private final int[] dist;
     private final int[] stampOf;
     private final int[] apron;
+    private final double[] pelagicScratch;
+    private final double[] carbonateScratch;
     private int stamp;
+    private Parallel parallel = Parallel.SERIAL;
 
     /** Rock erosion rate of the last step, m/Myr (0 at sea and where sediment was deposited). */
     public final float[] erosionMPerMyr;
@@ -92,9 +96,19 @@ public final class SurfaceProcesses {
         dist = new int[n];
         stampOf = new int[n];
         apron = new int[n];
+        pelagicScratch = new double[n];
+        carbonateScratch = new double[n];
         erosionMPerMyr = new float[n];
         depositM = new float[n];
         lakes = new byte[n];
+    }
+
+    /**
+     * Worker threads for the per-cell loops. Routing, erosion, transport and marine spreading follow the
+     * drainage order or share sediment between cells, so they stay on one thread.
+     */
+    public void setParallel(Parallel parallel) {
+        this.parallel = parallel;
     }
 
     /** One step of {@code dtMyr} on the current plates, climate and global state. */
@@ -102,9 +116,11 @@ public final class SurfaceProcesses {
         Lithosphere lith = sim.lithosphere();
         int n = grid.size();
         double sea = sim.seaLevelM();
-        for (int idx = 0; idx < n; idx++) {
-            elevation[idx] = (float) sim.elevationM(idx);
-        }
+        parallel.cells(n, (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                elevation[idx] = (float) sim.elevationM(idx);
+            }
+        });
         flow.route(elevation, sea);
         Arrays.fill(erosionMPerMyr, 0f);
         Arrays.fill(depositM, 0f);
@@ -435,26 +451,35 @@ public final class SurfaceProcesses {
         double area = grid.cellAreaKm2();
         boolean ooze = g.has(Milestone.CALCAREOUS_PLANKTON);
         double factory = g.has(Milestone.ANIMALS) ? 1.0 : g.has(Milestone.LIFE) ? 0.3 : 0.1;
+        // each cell only receives its own sediment; the totals are summed afterwards in cell order
+        parallel.cells(grid.size(), (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                pelagicScratch[idx] = 0.0;
+                carbonateScratch[idx] = 0.0;
+                if (!flow.isOcean(idx)) {
+                    continue;
+                }
+                double depth = sea - elevation[idx];
+                if (depth <= 5.0) {
+                    continue;
+                }
+                double fs = lith.isContinental(idx) ? Isostasy.SEDIMENT_LAND_FACTOR : Isostasy.SEDIMENT_MARINE_FACTOR;
+                double clay = cfg.pelagicMPerMyr() + (ooze && depth < cfg.ccdDepthM() ? cfg.oozeMPerMyr() : 0.0);
+                // settling mud never builds land: it stops a few metres below the surface
+                double km = Math.min(clay * dt / 1000.0, (depth - 5.0) / (fs * 1000.0));
+                pelagicScratch[idx] = km * area;
+                deposit(lith, idx, km * area);
+                depth = sea - elevation[idx];
+                if (depth > 5.0 && depth < cfg.carbonateDepthM() && climate.temperatureC[idx] >= cfg.carbonateMinTempC()) {
+                    double grow = Math.min(cfg.carbonateMPerMyr() * factory * dt / 1000.0, (depth - 5.0) / (fs * 1000.0));
+                    carbonateScratch[idx] = grow * area;
+                    deposit(lith, idx, grow * area);
+                }
+            }
+        });
         for (int idx = 0; idx < grid.size(); idx++) {
-            if (!flow.isOcean(idx)) {
-                continue;
-            }
-            double depth = sea - elevation[idx];
-            if (depth <= 5.0) {
-                continue;
-            }
-            double fs = lith.isContinental(idx) ? Isostasy.SEDIMENT_LAND_FACTOR : Isostasy.SEDIMENT_MARINE_FACTOR;
-            double clay = cfg.pelagicMPerMyr() + (ooze && depth < cfg.ccdDepthM() ? cfg.oozeMPerMyr() : 0.0);
-            // settling mud never builds land: it stops a few metres below the surface
-            double km = Math.min(clay * dt / 1000.0, (depth - 5.0) / (fs * 1000.0));
-            pelagicKm3 += km * area;
-            deposit(lith, idx, km * area);
-            depth = sea - elevation[idx];
-            if (depth > 5.0 && depth < cfg.carbonateDepthM() && climate.temperatureC[idx] >= cfg.carbonateMinTempC()) {
-                double grow = Math.min(cfg.carbonateMPerMyr() * factory * dt / 1000.0, (depth - 5.0) / (fs * 1000.0));
-                carbonateKm3 += grow * area;
-                deposit(lith, idx, grow * area);
-            }
+            pelagicKm3 += pelagicScratch[idx];
+            carbonateKm3 += carbonateScratch[idx];
         }
     }
 
@@ -465,32 +490,34 @@ public final class SurfaceProcesses {
                 : g.has(Milestone.PHOTOSYNTHESIS) ? 0.35 : 0.25;
         double h0 = cfg.soilDecayDepthM();
         int land = flow.landCount();
-        for (int k = 0; k < land; k++) {
-            int idx = flow.order[k];
-            double ice = climate.iceM[idx];
-            double regolith = lith.regolithM(idx);
-            if (ice > 0f) {
-                lith.setLastGlaciated(idx, (float) g.timeMyr());
+        parallel.cells(land, (from, to) -> {
+            for (int k = from; k < to; k++) {
+                int idx = flow.order[k];
+                double ice = climate.iceM[idx];
+                double regolith = lith.regolithM(idx);
+                if (ice > 0f) {
+                    lith.setLastGlaciated(idx, (float) g.timeMyr());
+                }
+                if (ice > 100f) {
+                    // ice sheets scrape shields down to fresh rock
+                    lith.setRegolithM(idx, (float) (regolith * Math.exp(-dt / 0.5)));
+                    continue;
+                }
+                double production = cfg.soilProductionMPerMyr() * plants * Math.min(3.0, runoffM[idx] / 0.5)
+                        * Math.exp((climate.temperatureC[idx] - 15.0) / 13.7);
+                double e = erosionMPerMyr[idx];
+                // dH/dt = P exp(-H / h0) - E, solved exactly over the step with u = exp(H / h0)
+                double u0 = Math.exp(Math.min(40.0, regolith / h0));
+                double u;
+                if (e > 1e-6) {
+                    double eq = production / e;
+                    u = eq + (u0 - eq) * Math.exp(-e * dt / h0);
+                } else {
+                    u = u0 + production * dt / h0;
+                }
+                lith.setRegolithM(idx, (float) (h0 * Math.log(Math.max(1.0, u))));
             }
-            if (ice > 100f) {
-                // ice sheets scrape shields down to fresh rock
-                lith.setRegolithM(idx, (float) (regolith * Math.exp(-dt / 0.5)));
-                continue;
-            }
-            double production = cfg.soilProductionMPerMyr() * plants * Math.min(3.0, runoffM[idx] / 0.5)
-                    * Math.exp((climate.temperatureC[idx] - 15.0) / 13.7);
-            double e = erosionMPerMyr[idx];
-            // dH/dt = P exp(-H / h0) - E, solved exactly over the step with u = exp(H / h0)
-            double u0 = Math.exp(Math.min(40.0, regolith / h0));
-            double u;
-            if (e > 1e-6) {
-                double eq = production / e;
-                u = eq + (u0 - eq) * Math.exp(-e * dt / h0);
-            } else {
-                u = u0 + production * dt / h0;
-            }
-            lith.setRegolithM(idx, (float) (h0 * Math.log(Math.max(1.0, u))));
-        }
+        });
     }
 
     // ------------------------------------------------------------------ read access

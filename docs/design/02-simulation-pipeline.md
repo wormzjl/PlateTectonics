@@ -74,9 +74,9 @@ Elevation is never stored; isostasy gives it whenever a part asks ([03](03-tecto
 ## Determinism (D-5)
 
 - RNG: a counter-based hash (SplitMix64 or a PCG mix) of `(worldSeed, streamId, step, cellIndex)`. No shared `Random` objects.
-- Parallel loops split by fixed row bands. Reductions (sums, maxima) combine in band order. Never depend on `HashMap` iteration order.
+- Parallel loops (`parallel/Parallel`) write only the state of their own cell or row. Sums, lists and budgets are built afterwards on one thread in cell order, so every thread count gives the single-threaded result bit for bit. Work that follows drainage order or shares material between cells (routing, erosion, transport, marine spreading, breadth-first bands, overlap resolution in plate motion) stays on one thread. Never depend on `HashMap` iteration order.
 - Every output carries `(modVersion, simVersion, settingsHash, seed)`. A mismatch on load means regenerate, or refuse with a clear message.
-- Golden tests: fixed seeds produce byte-identical outputs across runs and thread counts.
+- Golden tests: fixed seeds produce byte-identical outputs across runs and thread counts (`PlanetSimulationTest`: 1 vs 5 threads; `SurfaceProcessesTest`: two runs).
 
 ## Budgets (reference machine: 8-core desktop)
 

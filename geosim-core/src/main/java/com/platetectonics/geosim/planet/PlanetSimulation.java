@@ -7,6 +7,7 @@ import com.platetectonics.geosim.events.EventLog;
 import com.platetectonics.geosim.grid.CylinderGrid;
 import com.platetectonics.geosim.history.GlobalState;
 import com.platetectonics.geosim.history.WorldHistory;
+import com.platetectonics.geosim.parallel.Parallel;
 import com.platetectonics.geosim.surface.SurfaceConfig;
 import com.platetectonics.geosim.surface.SurfaceProcesses;
 import com.platetectonics.geosim.tectonics.PlateSimulation;
@@ -111,8 +112,22 @@ public final class PlanetSimulation {
 
     private void updateAboveSea() {
         double sea = plates.seaLevelM();
-        for (int idx = 0; idx < aboveSea.length; idx++) {
-            aboveSea[idx] = (float) (plates.elevationM(idx) - sea);
+        plates.parallel().cells(aboveSea.length, (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                aboveSea[idx] = (float) (plates.elevationM(idx) - sea);
+            }
+        });
+    }
+
+    /**
+     * Worker threads for every per-cell loop of plates, climate and surface. Loops that depend on order
+     * stay on one thread, so the planet is the same bit for bit for any count (tested).
+     */
+    public void setParallel(Parallel parallel) {
+        plates.setParallel(parallel);
+        climateModel.setParallel(parallel);
+        if (surface != null) {
+            surface.setParallel(parallel);
         }
     }
 

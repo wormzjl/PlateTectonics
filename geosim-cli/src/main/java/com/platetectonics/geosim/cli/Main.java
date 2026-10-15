@@ -12,6 +12,7 @@ import com.platetectonics.geosim.io.GifWriter;
 import com.platetectonics.geosim.io.MapImage;
 import com.platetectonics.geosim.io.SurfaceMaps;
 import com.platetectonics.geosim.io.TectonicMaps;
+import com.platetectonics.geosim.parallel.Parallel;
 import com.platetectonics.geosim.planet.PlanetSimulation;
 import com.platetectonics.geosim.surface.SurfaceConfig;
 import com.platetectonics.geosim.surface.SurfaceProcesses;
@@ -48,6 +49,7 @@ public final class Main {
         int gifWidth = 720;
         double reportEvery = 250;
         boolean platesOnly = false;
+        int threads = Runtime.getRuntime().availableProcessors();
         WorldHistory.Preset preset = WorldHistory.Preset.RANDOM;
         java.util.List<String> overrides = new java.util.ArrayList<>();
         Path out = Path.of("maps");
@@ -63,6 +65,7 @@ public final class Main {
                 case "--gif-width" -> gifWidth = Integer.parseInt(args[++k]);
                 case "--report-every" -> reportEvery = Double.parseDouble(args[++k]);
                 case "--plates-only" -> platesOnly = true;
+                case "--threads" -> threads = Integer.parseInt(args[++k]);
                 case "--history" -> preset = switch (args[++k]) {
                     case "random" -> WorldHistory.Preset.RANDOM;
                     case "earth" -> WorldHistory.Preset.EARTH_LIKE;
@@ -73,8 +76,9 @@ public final class Main {
                 case "--help", "-h" -> {
                     System.out.println("geosim-cli --seed N [--width W | --cell-km K] --age MYR [--history random|earth] "
                             + "[--plates-only] [--set CONSTANT=VALUE ...] --frame-every MYR --gif-width PX --report-every MYR --scale S "
-                            + "--ocean-depth M --out DIR");
+                            + "--ocean-depth M --threads N --out DIR");
                     System.out.println("  --frame-every 0 skips the timeline GIF");
+                    System.out.println("  --threads defaults to all cores; every count gives the same planet");
                     return;
                 }
                 default -> throw new IllegalArgumentException("unknown argument: " + args[k]);
@@ -106,6 +110,8 @@ public final class Main {
             System.out.println("set " + kv[0] + " = " + kv[1]);
         }
         PlanetSimulation sim = new PlanetSimulation(grid, seed, tectonics, surfaceCfg, preset, oceanDepth, platesOnly);
+        Parallel parallel = Parallel.of(threads);
+        sim.setParallel(parallel);
         long tInit = System.nanoTime();
 
         GifWriter gif = frameEvery > 0 ? new GifWriter(dir.resolve("timeline.gif"), 80) : null;
@@ -189,8 +195,10 @@ public final class Main {
         }
         System.out.println();
         double simMs = (tSim - tInit - renderNanos) / 1e6;
-        System.out.printf(Locale.ROOT, "init %.0f ms | %d steps in %.1f s (%.1f ms/step) | frames %.1f s | maps %.1f s%n",
-                (tInit - t0) / 1e6, steps, simMs / 1000.0, simMs / steps, renderNanos / 1e9, (tEnd - tSim) / 1e9);
+        System.out.printf(Locale.ROOT, "init %.0f ms | %d steps in %.1f s (%.1f ms/step, %d threads) | frames %.1f s | maps %.1f s%n",
+                (tInit - t0) / 1e6, steps, simMs / 1000.0, simMs / steps, parallel.threads(), renderNanos / 1e9,
+                (tEnd - tSim) / 1e9);
+        parallel.close();
         double[] phases = sim.phaseSeconds();
         System.out.printf(Locale.ROOT, "time split: plates %.1f s | climate %.1f s | surface %.1f s%n", phases[0], phases[1], phases[2]);
         System.out.println("-> " + dir.toAbsolutePath());

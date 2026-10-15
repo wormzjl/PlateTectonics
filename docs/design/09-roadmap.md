@@ -45,7 +45,17 @@
   | 99 | 36% | 35% | 15.5 °C | 1.52 PAL | 19% | 65 m/Myr | 279 / 1,992 m |
 
   Seed 42's history: GOE with a 35 Myr snowball at 2,010 Myr (2.5 Ga), eukaryotes 2,510, algae and NOE 3,610, animals 3,860, land plants 3,960, forests 4,020, calcareous plankton 4,210, diatoms 4,310 Myr; CO₂ today 409 ppm.
-- **Benchmark** (one thread per run): 31.25 km ~320 ms/step alone (~3.5 min per world; ~470 ms/step with five runs in parallel); 78 km ~33 ms/step (~21 s). Time split at 31.25 km: plates ~57%, rivers/erosion ~35%, climate ~8%.
+- **Benchmark** (Ryzen 7 9700X, 8 cores / 16 threads; seed 42 Earth-like, 4.5 Gyr, 640 steps; `--threads N`, default all cores):
+
+  | Cell | Threads | ms/step | World | Plates / climate / surface |
+  |---|---|---|---|---|
+  | 31.25 km | 1 (before multithreading) | 334 | 3.6 min | 117 / 19 / 78 s |
+  | 31.25 km | 8 | 177 | 1.9 min | 39 / 6 / 67 s |
+  | 31.25 km | 16 | 177 | 1.9 min | 40 / 6 / 67 s |
+  | 78 km | 1 | 27.5 | 18 s | — |
+  | 78 km | 8 | 19.6 | 13 s | — |
+
+  Every thread count writes byte-identical maps, history and events (D-5; `PlanetSimulationTest` checks 1 vs 5 threads). Per-cell loops run in parallel: the plate move copy (the largest cost, memory-bound), ocean ageing, elevations and sea level, temperature, the moisture sweeps (by row) and mixing, sea-floor sediment and weathering. What stays on one thread follows drainage order or shares material between cells. On the main thread at 16 threads, marine spreading from river mouths takes ~27% and Priority-Flood routing ~23%, so a second thread band (8 → 16) adds nothing. Making those two faster without changing results is the next lever.
 - **Tuning method:** sweeps of one JVM per variant, 6–8 at a time, at 78 km to find directions, then confirmation at 31.25 km. Erosion constants were tuned against present-day land erosion (Earth ~50 m/Myr) and continental hypsometry.
 - **Lessons:**
   - Coarse cells cannot resolve the steep slopes that do most mountain erosion. Stream power alone planed lowlands but left 4 km plateaus, so a sub-grid relief term was needed (D-30).

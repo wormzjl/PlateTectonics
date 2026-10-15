@@ -2,7 +2,7 @@ package com.platetectonics.geosim.climate;
 
 import com.platetectonics.geosim.grid.CylinderGrid;
 import com.platetectonics.geosim.history.GlobalState;
-
+import com.platetectonics.geosim.parallel.Parallel;
 
 /**
  * Climate from latitude, the global temperature, elevation and the land-sea layout
@@ -44,11 +44,21 @@ public final class ClimateModel {
     private final CylinderGrid grid;
     private final int[] queue;
     private final int[] dist;
+    private final float[] mixScratch;
+    private final double[] weatheringScratch;
+    private Parallel parallel = Parallel.SERIAL;
 
     public ClimateModel(CylinderGrid grid) {
         this.grid = grid;
         this.queue = new int[grid.size()];
         this.dist = new int[grid.size()];
+        this.mixScratch = new float[grid.size()];
+        this.weatheringScratch = new double[grid.size()];
+    }
+
+    /** Worker threads for the row and cell loops (results do not depend on the count). */
+    public void setParallel(Parallel parallel) {
+        this.parallel = parallel;
     }
 
     /**
@@ -72,22 +82,24 @@ public final class ClimateModel {
         double tg = g.globalTempC();
         double equator = tg + 13.0 - 0.3 * (tg - 15.0);
         double pole = tg - 32.0 + 0.5 * (tg - 15.0);
-        for (int j = 0; j < grid.height(); j++) {
-            double s = Math.sin(Math.toRadians(grid.latitudeDeg(j)));
-            double s2 = s * s;
-            double sea = equator + (pole - equator) * s2;
-            for (int i = 0; i < w; i++) {
-                int idx = j * w + i;
-                if (e[idx] <= 0f) {
-                    c.temperatureC[idx] = (float) Math.max(-2.0, sea);
-                    c.seasonalRangeC[idx] = (float) (2.0 + 8.0 * Math.abs(s));
-                    continue;
+        parallel.rows(grid.height(), (from, to) -> {
+            for (int j = from; j < to; j++) {
+                double s = Math.sin(Math.toRadians(grid.latitudeDeg(j)));
+                double s2 = s * s;
+                double sea = equator + (pole - equator) * s2;
+                for (int i = 0; i < w; i++) {
+                    int idx = j * w + i;
+                    if (e[idx] <= 0f) {
+                        c.temperatureC[idx] = (float) Math.max(-2.0, sea);
+                        c.seasonalRangeC[idx] = (float) (2.0 + 8.0 * Math.abs(s));
+                        continue;
+                    }
+                    double inland = Math.min(1.0, c.coastDistanceKm[idx] / 1_500.0);
+                    c.temperatureC[idx] = (float) (sea - LAPSE_C_PER_M * e[idx] - 6.0 * s2 * inland + 2.0 * (1.0 - s2) * inland);
+                    c.seasonalRangeC[idx] = (float) (3.0 + 22.0 * Math.abs(s) * (0.3 + 0.7 * inland));
                 }
-                double inland = Math.min(1.0, c.coastDistanceKm[idx] / 1_500.0);
-                c.temperatureC[idx] = (float) (sea - LAPSE_C_PER_M * e[idx] - 6.0 * s2 * inland + 2.0 * (1.0 - s2) * inland);
-                c.seasonalRangeC[idx] = (float) (3.0 + 22.0 * Math.abs(s) * (0.3 + 0.7 * inland));
             }
-        }
+        });
     }
 
     // ------------------------------------------------------------------ precipitation
@@ -98,33 +110,47 @@ public final class ClimateModel {
         double cellKm = grid.cellKm();
         double wetter = Math.exp(0.03 * (g.globalTempC() - 15.0)) * (g.snowball() ? 0.1 : 1.0);
         float[] p = c.precipitationMm;
-        for (int j = 0; j < h; j++) {
-            double lat = Math.abs(grid.latitudeDeg(j));
-            double zonal = zonal(lat) * wetter;
-            int dir = lat < 30.0 ? -1 : lat < 60.0 ? 1 : -1;
-            double decayKm = lat < 25.0 ? 2_500.0 : lat < 60.0 ? 1_500.0 : 1_000.0;
-            // prevailing wind, then the weaker flow from the other side (monsoons, cyclones on lee coasts)
-            sweep(c, e, j, dir, zonal, decayKm, 1.0, p, false);
-            sweep(c, e, j, -dir, zonal, decayKm * 0.6, REVERSE_FLOW, p, true);
-        }
-        // north-south mixing (storms and monsoons are not zonal): repeated 1-2-1 passes, each adding half a
-        // cell squared of variance, to a spread of MIXING_KM whatever the cell size
-        float[] tmp = new float[p.length];
-        int passes = Math.max(1, (int) Math.round(2.0 * Math.pow(MIXING_KM / cellKm, 2.0)));
-        for (int pass = 0; pass < passes; pass++) {
-            System.arraycopy(p, 0, tmp, 0, p.length);
-            for (int j = 0; j < h; j++) {
-                int jn = Math.max(0, j - 1);
-                int js = Math.min(h - 1, j + 1);
-                for (int i = 0; i < w; i++) {
-                    p[j * w + i] = 0.5f * tmp[j * w + i] + 0.25f * (tmp[jn * w + i] + tmp[js * w + i]);
-                }
+        // rows are independent: each sweep reads and writes its own row only
+        parallel.rows(h, (from, to) -> {
+            for (int j = from; j < to; j++) {
+                double lat = Math.abs(grid.latitudeDeg(j));
+                double zonal = zonal(lat) * wetter;
+                int dir = lat < 30.0 ? -1 : lat < 60.0 ? 1 : -1;
+                double decayKm = lat < 25.0 ? 2_500.0 : lat < 60.0 ? 1_500.0 : 1_000.0;
+                // prevailing wind, then the weaker flow from the other side (monsoons, cyclones on lee coasts)
+                sweep(c, e, j, dir, zonal, decayKm, 1.0, p, false);
+                sweep(c, e, j, -dir, zonal, decayKm * 0.6, REVERSE_FLOW, p, true);
             }
+        });
+        // north-south mixing (storms and monsoons are not zonal): repeated 1-2-1 passes, each adding half a
+        // cell squared of variance, to a spread of MIXING_KM whatever the cell size; ping-pong buffers
+        int passes = Math.max(1, (int) Math.round(2.0 * Math.pow(MIXING_KM / cellKm, 2.0)));
+        float[] src = p;
+        float[] dst = mixScratch;
+        for (int pass = 0; pass < passes; pass++) {
+            float[] a = src;
+            float[] b = dst;
+            parallel.rows(h, (from, to) -> {
+                for (int j = from; j < to; j++) {
+                    int jn = Math.max(0, j - 1);
+                    int js = Math.min(h - 1, j + 1);
+                    for (int i = 0; i < w; i++) {
+                        b[j * w + i] = 0.5f * a[j * w + i] + 0.25f * (a[jn * w + i] + a[js * w + i]);
+                    }
+                }
+            });
+            src = b;
+            dst = a;
         }
-        for (int idx = 0; idx < p.length; idx++) {
-            double pet = Math.max(0.0, 60.0 * (c.temperatureC[idx] + 3.0));
-            c.aridity[idx] = (float) (pet <= 1.0 ? 10.0 : Math.min(10.0, p[idx] / pet));
+        if (src != p) {
+            System.arraycopy(src, 0, p, 0, p.length);
         }
+        parallel.cells(p.length, (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                double pet = Math.max(0.0, 60.0 * (c.temperatureC[idx] + 3.0));
+                c.aridity[idx] = (float) (pet <= 1.0 ? 10.0 : Math.min(10.0, p[idx] / pet));
+            }
+        });
     }
 
     /**
@@ -296,14 +322,23 @@ public final class ClimateModel {
      * warmer than the global mean weathers faster, fresh (eroding) rock faster than old soil-covered shields.
      */
     private void weathering(GlobalState g, float[] erosion, float[] e, Climate c) {
-        double sum = 0.0;
         double tg = g.globalTempC();
-        for (int idx = 0; idx < grid.size(); idx++) {
-            if (e[idx] <= 0f || c.iceM[idx] > 0f) {
-                continue;
+        double[] term = weatheringScratch;
+        parallel.cells(grid.size(), (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                if (e[idx] <= 0f || c.iceM[idx] > 0f) {
+                    continue;
+                }
+                double fresh = erosion == null ? 1.0 : 0.5 + 0.5 * Math.min(1.0, erosion[idx] / 50.0);
+                term[idx] = c.precipitationMm[idx] / 750.0 * Math.exp((c.temperatureC[idx] - tg) / 13.7) * fresh;
             }
-            double fresh = erosion == null ? 1.0 : 0.5 + 0.5 * Math.min(1.0, erosion[idx] / 50.0);
-            sum += c.precipitationMm[idx] / 750.0 * Math.exp((c.temperatureC[idx] - tg) / 13.7) * fresh;
+        });
+        // summed in cell order, as single-threaded code would, so the total is the same bit for bit
+        double sum = 0.0;
+        for (int idx = 0; idx < grid.size(); idx++) {
+            if (e[idx] > 0f && c.iceM[idx] <= 0f) {
+                sum += term[idx];
+            }
         }
         c.landWeathering = sum / (0.29 * grid.size() * EARTH_LAND_WEIGHT);
     }
