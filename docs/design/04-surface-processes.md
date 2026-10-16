@@ -1,9 +1,9 @@
 # 04 · Surface processes: climate, sea level, rivers, erosion, deposition, glaciers, weathering
 
 > **Level 1** · Read when: you work on climate, rainfall, rivers, erosion, sediment, ice or soils.
-> Decisions: D-30, D-31, D-33, D-37, D-39, D-40 · Related: [02 step order](02-simulation-pipeline.md#order-of-operations-in-one-step), [07](07-life-atmosphere-sun.md) (global temperature, life), [03](03-tectonics.md) (crust, isostasy, trenches), [05](05-lithology.md) (where sediment will be recorded) · Go deeper: report § "Coal needs land plants…" (climate requirements for coal).
+> Decisions: D-30, D-31, D-33, D-37, D-39, D-40, D-41 · Related: [02 step order](02-simulation-pipeline.md#order-of-operations-in-one-step), [07](07-life-atmosphere-sun.md) (global temperature, life), [03](03-tectonics.md) (crust, isostasy, trenches), [05](05-lithology.md) (where sediment will be recorded) · Go deeper: report § "Coal needs land plants…" (climate requirements for coal).
 
-**Summary.** Every step, after the plates move, a **climate field** is computed from latitude, the global temperature of the box models ([07](07-life-atmosphere-sun.md)), elevation and the land–sea layout. Moisture is carried along each latitude row with the prevailing wind and, more weakly, against it, and poleward from the equator (monsoons, storm tracks); plants return part of the rain to the air, and ranges cast **rain shadows**. Rivers are routed over the land with depressions filled into **lakes**; a hollow below sea level counts as a lake too unless it belongs to a sea of at least 100,000 km². Rock erodes by an **implicit stream-power law plus a sub-grid relief term**, and the surface drops only by the isostatic share of the rock removed, because the crust rebounds. Rivers deposit what they cannot carry; the rest builds **shelves, turbidite aprons and deltas** at sea. Sediment mass is conserved. **Ice sheets** grow where summers stay below 0 °C, and the water they hold lowers sea level. A **regolith** front advances with heat and rain and is stripped by erosion and ice. Every change goes through the crust thickness and sediment fields, so isostasy and sea level follow. Nothing is written to rock columns yet (Phase 6).
+**Summary.** Every step, after the plates move, a **climate field** is computed from latitude, the global temperature of the box models ([07](07-life-atmosphere-sun.md)), elevation and the land–sea layout. Moisture is carried along each latitude row with the prevailing wind and, more weakly, against it, and poleward from the equator (monsoons, storm tracks); plants return part of the rain to the air, and ranges cast **rain shadows**. Rivers are routed over the land with depressions filled into **lakes**; a hollow below sea level counts as a lake too unless it belongs to a sea of at least 100,000 km². Rock erodes by an **implicit stream-power law plus a sub-grid relief term**, and the surface drops only by the isostatic share of the rock removed, because the crust rebounds. Rivers deposit what they cannot carry; the rest builds **shelves, continental slopes, turbidite fans and deltas** at sea, shaped by each river's supply and its margin. Sediment mass is conserved. **Ice sheets** grow where summers stay below 0 °C, and the water they hold lowers sea level. A **regolith** front advances with heat and rain and is stripped by erosion and ice. Every change goes through the crust thickness and sediment fields, so isostasy and sea level follow. Nothing is written to rock columns yet (Phase 6).
 
 ## As built (Phase 3) vs planned
 
@@ -13,12 +13,12 @@
 | Ice sheets from a mass-balance rule with a plastic profile; ice water taken out of the ocean | Ice flow, orbital cycles, moraines, till, outwash, loess, fjords |
 | D8 Priority-Flood routing with lakes and endorheic basins | Separate sediment and evaporites in endorheic lakes |
 | Implicit stream power + sub-grid relief erosion; isostatic surface drop; transport-limited deposition; lakes trap sediment | Hillslope diffusion and landslides; erodibility by rock type (needs lithology, Phase 6) |
-| Shelves, turbidite aprons, deltas; pelagic clay, carbonate ooze, shallow carbonate | Heavy-mineral placers ([06](06-resources.md)); river network export to Tier 1.5 |
+| Shelves, slopes, turbidite fans, deltas (D-41); pelagic clay, carbonate ooze, shallow carbonate | Heavy-mineral placers ([06](06-resources.md)); river network export to Tier 1.5 |
 | Regolith depth, last glaciation time, exhumation per cell | Soil types (D-18); dune fields |
 
 ## Sea level
 
-- The ocean holds a fixed water volume: a mean depth of 2,620 m over the whole planet (CLI `--ocean-depth`), minus the water held in ice sheets.
+- The ocean holds a fixed water volume: by default a mean depth of 2,660 m over the whole planet (CLI `--ocean-depth`, world setting `ocean_depth_m`), minus the water held in ice sheets. Earth's is about 2,620 m; the extra 40 m brings simulated planets to about 29% land on average (D-41). Their continents stand low and flat, so the land fraction still swings between ~13% and ~41% from seed to seed, with the ice and the ocean basins at the end ([Known gaps](#known-gaps)).
 - Sea level is the level at which the basins hold that volume (1 m histogram fill). It is recomputed twice per step: after the plates move, and after surface processes and ice ([02](02-simulation-pipeline.md#order-of-operations-in-one-step)).
 - Young (shallow) ocean floor and ice sheets therefore move sea level without extra rules. The layers that transgressions and regressions leave are not recorded until rock columns exist ([05](05-lithology.md)).
 - In Minecraft the present-day level sits at y = 63 (D-19).
@@ -67,30 +67,40 @@ Computed every step (`ClimateModel`) from the global state, elevation above sea 
 
 ## Sea floor
 
-**River sediment at a mouth** (mass conserved; D-40). Sea cells are taken nearest first by straight-line distance from the mouth, reached through the sea edge to edge, in rings one cell wide (a bucket queue). Shelves and deltas therefore grow as round fans; the breadth-first search used before drew diamonds, which showed as 45° coasts hundreds of km long. A neighbour lies at most one ring further out than the cell that queues it, so two buffers (this ring, the next) hold the whole queue.
+**River sediment at a mouth** (mass conserved; D-40, D-41). Sea cells are taken nearest first by straight-line distance from the mouth, reached through the sea edge to edge, in rings one cell wide (a bucket queue). Shelves, fans and deltas therefore grow round; the breadth-first search used before drew diamonds, which showed as 45° coasts hundreds of km long. A neighbour lies at most one ring further out than the cell that queues it, so two buffers (this ring, the next) hold the whole queue.
 
-1. **Shelf:** sea cells within 300 km of the mouth fill to 120 m below sea level.
-2. **Turbidite aprons:** the rest is shared evenly among the deeper cells out to 900 km (2,700 km if no deep water lies within 900 km), none built above 120 m below sea level; a full cell passes its share on to the others.
-3. **Delta top:** what is left fills the sea to 1 m below sea level, nearest first, prograding past the search radius across the sea as far as it takes.
-4. **Delta plain:** only when the whole connected sea is full does the surplus spread evenly over it and build land.
+Each mouth gets its own shape from its sediment this step, as a multiple q of the median mouth's:
 
-Before D-40, steps 2 and 4 put the surplus on as few cells as they found, often the mouth alone: about 20% of all marine sediment piled into single cells. Small seas no longer fill up as whole basins: ocean floor that one plate wraps round closes tectonically (D-36, [03](03-tectonics.md#boundary-processes)), and hollows below sea level smaller than 100,000 km² are lakes (D-39).
+- **Shelf radius** R = 100 km × q^0.25, between 50 and 250 km. A mouth within 300 km of a trench or an arc (an active margin) gets a shelf one cell wide.
+- **Fan length** L = 100 km × q^0.5, between 50 and 400 km: bigger rivers build longer fans (Sømme et al. 2009).
 
-**Walks made ahead (same result on any thread count).** The cells a mouth takes, and their order, depend only on which cells are sea; what earlier mouths deposited only decides where the walk stops. So the walks are made ahead on the worker threads while the spreading itself stays in cell order on one thread:
+The mouth's walk goes out to R or 3L, whichever is further:
+
+1. **Shelf:** 65% of the sediment fills the cells within R, nearest first, up to a ramp 10 m deep at the mouth that slopes to the shelf break (120 m) at R.
+2. **Fan:** the other 35% (canyons and gravity flows bypass the shelf), plus what the shelf could not hold, is shared over the deeper cells beyond R out to 3L in proportion to e^(−d/L). No cell builds above a continental slope that falls 50 m/km from the shelf break to 2,000 m below it, and then a rise that falls 5 m/km. A full cell passes the rest of its share on to the others (water filling).
+3. **Delta top:** what is left builds the mouth cell up to 2 m above sea level. It becomes land and the coast moves out.
+4. **Drape:** any rest raises the fan's slope and rise by the same height everywhere, never above the shelf break. The margin grows up and out as a wedge, not as a plateau at the shelf break.
+5. **Beyond the fan:** once the fan is full to the shelf break, the shelf builds out at the shelf break, nearest first, as far as it takes. Only a sea that is full to the shelf break all over (an enclosed sea) fills on to 1 m below sea level; after that the surplus spreads over all of it as a delta plain.
+
+The mouths take turns in one of four scan orders (rows down or up, columns east or west), rotating each step, so no direction always reaches a shared sea first.
+
+Before D-41 every mouth built a flat shelf at −120 m out to 300 km and spread the rest evenly out to 900 km, never above −120 m: flat plateaus round every river, then a delta top that filled the sea to −1 m. Before D-40 the surplus went on as few cells as the search found, often the mouth alone: about 20% of all marine sediment piled into single cells. Small seas no longer fill up as whole basins: ocean floor that one plate wraps round closes tectonically (D-36, [03](03-tectonics.md#boundary-processes)), and hollows below sea level smaller than 100,000 km² are lakes (D-39).
+
+**Walks made ahead (same result on any thread count).** The cells a mouth takes, and their order, depend only on which cells are sea; what earlier mouths deposited only decides where the walk stops. So the walks are made ahead on the worker threads while the spreading itself stays in turn order on one thread:
 
 1. Mouths go in batches of up to 8,192, sized so that a batch records about 8 million cells. Each batch is cut into bands of columns, four per worker thread.
-2. A worker takes a band and spreads its mouths in order, exactly as above but on its own copy of the sea floor, and records the walk: every ring it took, one ring more, and the cells it had queued for the next ring.
-3. The calling thread spreads each mouth for real along its recorded walk. Where a mouth in another band changed the sea floor so the walk must go further (~2% of mouths at 78 km, ~4% at 31.25 km), it carries the walk on from the recorded queue.
+2. A worker takes a band and spreads its mouths in order, with the same code as the real spreading but on its own copy of the sea floor, and records the walk: every ring it took, one ring more, and the cells it had queued for the next ring.
+3. The calling thread spreads each mouth for real along its recorded walk. Where the walk must go further than recorded, it carries the walk on from the recorded queue. That happens to ~3% of mouths at 78 km: mouths whose fan is full to the shelf break walk on past the recorded window, across the shelf they built before.
 
-Spreading only adds sediment, so a cell already at shelf depth (or at the delta top) when a batch begins stays there until the batch ends. Workers flag such cells in the record, and the spreading skips them without reading their elevation; at 31.25 km that is 87% of the cells searched. A batch records at most 16.7 million cells (~200 MB). Past that, a worker records only the mouth, and the calling thread walks it.
+A batch records at most 16.7 million cells (~200 MB). Past that, a worker records only the mouth, and the calling thread walks it.
 
-Recorded walks stay inside a window of 3 apron radii plus 3 cells around the mouth. A cell of ring r lies less than r + 1 cells from the mouth, so a window of half-width R holds rings up to R − 1. The visited marks take one byte per cell, so a worker's marks fit in its L1 cache.
+Recorded walks stay inside a window around the mouth: the furthest any mouth reaches (3 × the longest fan length, 1,200 km) plus 3 cells. A cell of ring r lies less than r + 1 cells from the mouth, so a window of half-width R holds rings up to R − 1. The visited marks take one byte per cell, so a worker's marks fit in its L1 cache.
 
 **Settling in place:**
 
 - Pelagic clay and dust: 2 m/Myr in water deeper than 5 m. It stops 5 m below sea level and never builds land.
 - Carbonate ooze: +6 m/Myr above the carbonate compensation depth (4,500 m) once calcareous plankton exist ([07](07-life-atmosphere-sun.md#life-milestones-stochastic)).
-- Shallow carbonate (reefs, platforms): 40 m/Myr in water 5–150 m deep and at least 20 °C. Full rate once animals exist, × 0.3 with microbial life only, × 0.1 before life. Growth stops 5 m below sea level.
+- Shallow carbonate (reefs, platforms; D-41): 40 m/Myr × e^(−z / 27 m) at water depth z, in water 5–150 m deep and at least 20 °C. It grows fastest in the top few tens of metres, as light does (Bosscher & Schlager 1992). As the floor rises the rate rises with it; the step is solved exactly (u = e^(z/z₀) falls by f_s r dt / z₀), and growth stops 5 m below sea level. There is no growth where river sediment arrived faster than 10 m/Myr this step, because mud smothers the factories. Full rate once animals exist, × 0.8 with microbial life only (stromatolite platforms), × 0.4 before life.
 
 **Sediment on ocean floor stays oceanic** (D-31). It forms a passive-margin wedge on transitional crust, rides with its plate to a trench, and is recycled there: 50% is scraped into the overriding plate's accretionary wedge, which builds up to sea level (D-38), and the rest subducts ([03](03-tectonics.md#crust-growth)). Converting thick piles to continental crust made unsinkable crust from sediment alone and inflated continental area to ~58%.
 
@@ -134,13 +144,26 @@ Arid cells with a sand supply (deltas, beaches, eroded sandstone) become dune fi
 | `softSedimentFactor` | 2 | × | Sediment and soft cover erode this much faster than crystalline rock |
 | `bareLandFactor` | 1.5 | × | Erodibility before land plants (1.15 with plants but no forests) |
 | `glacialFactor` | 2 | × | Extra erodibility under 300 m or more of ice (linear below) |
-| `shelfDepthM` | 120 | m | River sediment builds shelves up to this depth below sea level |
-| `shelfRadiusKm` | 300 | km | Shelf building reaches this far from a river mouth |
-| `apronRadiusKm` | 900 | km | The rest spreads as turbidite aprons this far out |
+| `shelfDepthM` | 120 | m | Shelf break: shelves slope down to this depth below sea level (D-41) |
+| `shelfRadiusKm` | 100 | km | Shelf radius R on a passive margin for a river of the step's median supply |
+| `shelfSupplyExponent` | 0.25 | — | R grows as (supply / median)^this … |
+| `shelfRadiusMinKm`, `shelfRadiusMaxKm` | 50, 250 | km | … between these |
+| `activeMarginKm` | 300 | km | A trench or arc this close to a mouth gives it a shelf one cell wide |
+| `rampTopM` | 10 | m | Shelves fill to this depth at the mouth, sloping to the shelf break at R |
+| `bypassFraction` | 0.35 | share | Sediment that goes straight to the fan even while the shelf has room |
+| `fanLengthKm` | 100 | km | Fan e-folding length L for a river of median supply; fans reach 3L |
+| `fanSupplyExponent` | 0.5 | — | L grows as (supply / median)^this … |
+| `fanLengthMinKm`, `fanLengthMaxKm` | 50, 400 | km | … between these |
+| `slopeMPerKm`, `slopeFootM` | 50, 2,000 | m/km, m | Fans build no higher than a continental slope this steep, down to this far below the shelf break … |
+| `riseMPerKm` | 5 | m/km | … and a continental rise this steep beyond |
+| `deltaTopM`, `deltaRadiusKm` | 2, 0 | m, km | The delta top builds the shelf this far above sea level, within this distance of the mouth (0: the mouth cell) |
 | `pelagicMPerMyr` | 2 | m/Myr | Clay and dust settling at sea (in water deeper than 5 m) |
 | `oozeMPerMyr` | 6 | m/Myr | Carbonate ooze above the CCD once calcareous plankton exist |
 | `ccdDepthM` | 4,500 | m | Carbonate compensation depth |
-| `carbonateMPerMyr` | 40 | m/Myr | Reef and platform carbonate in warm shallow seas once animals exist (less before) |
+| `carbonateMPerMyr` | 40 | m/Myr | Reef and platform carbonate at the sea surface in warm water once animals exist |
+| `carbonateDecayM` | 27 | m | … falling off with depth as e^(−z / this) |
+| `carbonateClasticLimitMPerMyr` | 10 | m/Myr | No carbonate where river sediment arrives faster than this |
+| `carbonateMicrobialFactor`, `carbonateAbioticFactor` | 0.8, 0.4 | × | Carbonate rate with microbial life only, and before life |
 | `carbonateDepthM` | 150 | m | Carbonate factories work above this depth |
 | `carbonateMinTempC` | 20 | °C | … and in water at least this warm |
 | `soilProductionMPerMyr` | 60 | m/Myr | Weathering-front advance into bare rock, warm and wet, under forests |
@@ -165,7 +188,8 @@ Arid cells with a sand supply (deltas, beaches, eroded sandstone) become dune fi
 
 - **Ocean-floor sediment is too thick.** At 4.5 Gyr ~1.2–1.6 × 10⁹ km³ stands on the sea floor, roughly 2–3× an Earth-scaled estimate. The marine flux is Earth-like, but sediment stays ~120 Myr on the sea floor before a trench recycles it, against Earth's ~40 Myr.
 - **No ocean currents or subtropical highs**, so there are no hyper-arid desert cores or cold-coast deserts (Atacama, Namib). Land at 20–30° gets 330–390 mm/yr against Earth's ~600, yet deserts cover only 6–11% of land (Earth ~20%): cells there are dry rather than hyper-arid. Ice covers 13–21% of land (Earth ~10%). Forests and grasslands are near Earth's shares (78 km cells, 4 seeds).
-- **Continental interiors sit close to sea level** (median 120–240 m above sea level at 78 km; Earth's continents stand higher). Where they are flat, small sea-level changes flood or expose large areas, so the flooded share of continental crust varies from run to run. Freeboard (cratonic buoyancy, dynamic topography) is not modelled.
+- **Continental interiors sit close to sea level** (median 120–240 m above sea level at 78 km; Earth's continents stand higher). Where they are flat, small sea-level changes flood or expose large areas, so the flooded share of continental crust varies from run to run (3–65% at 4.5 Gyr). With 2,660 m of water, land averages 29.1% over 12 seeds at 78 km and 27.9% over 8 at 31.25 km, but single seeds range from 13% to 41%: those that end with 100–230 m of ice leave their platforms dry. 50 m of water moves the mean by ~6 points. Freeboard (cratonic buoyancy, dynamic topography) and continental accommodation (rifted margins, thermal sag, flexure; [review](../reports/Marine%20spreading%20review.md) H1) are not modelled.
+- **Marine spreading costs ~2× what it did before D-41** (31.25 km world ~230 s, was ~117 s): every mouth walks out to 3 fan lengths and deposits on every fan cell, on one thread. Spreading mouths whose reaches do not overlap at the same time would keep the result exact.
 - No hillslope diffusion or landslides beyond the tectonic slope relaxation of thick crust ([03](03-tectonics.md#plateaus-and-roots)).
 - Glaciers are v0: no ice flow, no orbital cycles, no moraines or loess.
 - Endorheic lakes do not yet keep their sediment separately or make evaporites.

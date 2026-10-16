@@ -1,6 +1,8 @@
 # Marine science plan (2026-10-16, for owner review)
 
-Plan for the cheap marine-model fixes H2, H3, H8 (and optionally H9 and H12) from [Marine spreading review](Marine%20spreading%20review.md). No code is changed until the owner approves. These fixes change the planet on purpose. They stay deterministic and give the same planet on any thread count (D-5). They would become decision D-41.
+Plan for the cheap marine-model fixes H2, H3, H8 (and optionally H9 and H12) from [Marine spreading review](Marine%20spreading%20review.md).
+
+> **Status (2026-10-16):** the owner approved H2, H3 and H8 as written, H12 towards Earth's 29% land, and H9 for Phase 6. Built as [D-41](../design/decisions.md). Measuring the rules as written changed five of them; [§ Outcome](#outcome) has the numbers. The rest of this page is the plan as approved. These fixes change the planet on purpose. They stay deterministic and give the same planet on any thread count (D-5). They would become decision D-41.
 
 ## L0 — Summary
 
@@ -83,3 +85,46 @@ Runs:
 1. Approve H2, H3 and H8 as above? Add H9 now, or later with Phase 6?
 2. Land-fraction target for the H12 retune: keep today's ~35–40%, or aim for Earth's 29%?
 3. The exact speedups (same planet, faster) are finished in the same working tree. Commit them first, so this change starts from a clean, hash-checked baseline?
+
+## Outcome
+
+Measured with the validation report (78 km, seeds 42 and 1; 31.25 km, seed 42; plus 12 seeds at 78 km and 8 at 31.25 km for the land fraction). Seed 42 gives byte-identical maps on 1 and 16 threads at both cell sizes; 47 tests pass.
+
+**As written**, H2 made things worse:
+
+- The delta top built every shelf cell to +2 m whenever a fan was full, every step. Water 0–200 m deep fell to ~2% of the ocean, and ~8% of the planet sat within 100 m above sea level.
+- The 25 m/km cap reaches the abyss ~175 km beyond the shelf, whatever the fan length. Fans had little room, so 46% of the marine sediment went to the drape, which filled cells to −120 m by weight: plateaus again.
+- About 6% of mouths got the 600 km maximum fan (the median-relative scaling has a heavy tail). Every mouth walks to 3L, so a 31.25 km world took 301 s (it was 117 s).
+
+**Changes made while tuning** (all in D-41 and [04 § Sea floor](../design/04-surface-processes.md#sea-floor)):
+
+| Part | As planned | As built | Why |
+|---|---|---|---|
+| Delta top | All shelf-ramp cells to sea + 2 m | The mouth cell only (`deltaRadiusKm` 0) | Keeps shelves under water; deltas still become land |
+| Fan cap | −120 m − 25 m/km × (d − R) | Slope 50 m/km down to 2,000 m below the shelf break, then rise 5 m/km | Fans get room out to their length |
+| Fan length | 150 km × q^0.5, 75–600 km | 100 km × q^0.5, 50–400 km | Fewer giant fans; walks 56% shorter |
+| Drape | e^(−d/L) shares, up to −120 m | The slope and rise are raised by one height, up to −120 m | No plateaus: the margin grows as a wedge |
+| Leftover, open ocean | (not specified past the drape) | Shelf builds out at −120 m as far as it takes; only enclosed seas fill to −1 m | The old −1 m fill made 2.5 × 10⁹ km³ of near-sea-level platform |
+| Ocean water (H12) | Retune | 2,660 m (Earth 2,620 m) | 12 seeds at 78 km average 29.1% land (33.9% at 2,620 m); 8 seeds at 31.25 km 27.9% |
+
+H3 and H8 are built as planned.
+
+**Validation, before → after** (2,660 m water for "after"):
+
+| Measure | Earth | 78 km seed 42 | 78 km seed 1 | 31.25 km seed 42 |
+|---|---|---|---|---|
+| Ocean 0–200 / 200–3,000 / >3,000 m | ≈ 7.5 / 15 / 77% | 10.3 / 11.3 / 78.4 → 2.1 / 8.7 / 89.2 | 4.7 / 12.2 / 83.1 → 7.9 / 7.5 / 84.5 | 4.9 / 7.1 / 88.0 → 31.8 / 7.4 / 60.8 |
+| … of the 0–200 m on continental crust | most | → 25% | → 69% | → 86% |
+| Shelf width, mean | ~80 km | 151 → 38 km | 60 → 92 km | 75 → 630 km |
+| Thickest sediment on ocean floor | ≤ ~20 km | 22.9 → 17.7 km | 19.3 → 18.1 km | 19.7 → 17.5 km |
+| Land built from the sea in the last step | small | 0 → 0.6 M km² | 0 → 1.7 M km² | 0 → 6.3 M km² |
+| Land | 29% | 35.4 → 38.2% | 38.9 → 27.1% | 41.9 → 14.2% |
+| Time, 16 threads | — | 11.0 → 19.8 s | 12.0 → 17.1 s | 116.8 → 229.4 s |
+
+What the numbers say:
+
+- **Marine-built shelf is now small** (1–3% of the ocean); where much water is under 200 m deep, 75–93% of it is flooded continent, as on Earth.
+- **The land fraction is set by the end state, not by the marine rules.** Across 12 seeds at 78 km it ranges 13–39%: seeds with 100–230 m of ice at the end leave their low continental platforms dry, and seeds with little ice flood them. Continents stand only a few hundred metres above sea level and are flat, so 50 m of water moves the mean land fraction by ~6 points. That is the review's H1 (no continental accommodation, no freeboard), not something the marine rules can fix. At 31.25 km, 8 seeds average 27.9% (14–41%); seed 42 is the most flooded of them (65% of its continental crust under water).
+- **Cost doubled at 31.25 km.** Every mouth now walks out to 3 fan lengths and every fan cell gets its share. The old rules stopped walking when the sediment ran out. A faster replay needs a different approach (for example, spreading mouths whose reaches do not overlap at the same time, which is still exact).
+- Shallow carbonate fell from ~1.0 to ~0.2 × 10⁹ km³ per 4.5 Gyr: it now grows fast only in the top few tens of metres, and not where rivers deliver mud.
+- Ocean-floor sediment now displaces 370–630 m of water (it was 315–580 m).

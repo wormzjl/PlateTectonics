@@ -11,6 +11,7 @@ import com.platetectonics.geosim.surface.SurfaceConfig;
 import com.platetectonics.geosim.surface.SurfaceProcesses;
 import com.platetectonics.geosim.tectonics.Lithosphere;
 import com.platetectonics.geosim.tectonics.TectonicsConfig;
+import com.platetectonics.geosim.terrain.SeaLevel;
 
 import java.util.List;
 import java.util.Locale;
@@ -33,7 +34,7 @@ public final class MasterWorld {
      */
     public record Settings(long seed, int width, double ageMyr, WorldHistory.Preset preset, double meanOceanDepthM) {
         public static Settings defaults(long seed) {
-            return new Settings(seed, 1_280, 4_500.0, WorldHistory.Preset.RANDOM, 2_620.0);
+            return new Settings(seed, 1_280, 4_500.0, WorldHistory.Preset.RANDOM, SeaLevel.DEFAULT_OCEAN_DEPTH_M);
         }
 
         public double cellKm() {

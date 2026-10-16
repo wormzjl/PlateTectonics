@@ -12,6 +12,8 @@ import com.platetectonics.geosim.tectonics.PlateSimulation;
 import com.platetectonics.geosim.tectonics.TectonicsConfig;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.RecordComponent;
+
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -92,12 +94,14 @@ class SurfaceProcessesTest {
      */
     @Test
     void walksMadeAheadGiveThePlanetOfOneThread() {
-        record Case(int width, SurfaceConfig cfg, int aheadCells) {
+        // resumes: walks made ahead stop short somewhere (not when the window covers the grid: every walk
+        // made ahead then goes as far as the sea or the spreading does)
+        record Case(int width, SurfaceConfig cfg, int aheadCells, boolean resumes) {
         }
         Case[] cases = {
-                new Case(256, SurfaceConfig.defaults(), 1 << 24),
-                new Case(256, SurfaceConfig.defaults(), 2_000),
-                new Case(128, apronKm(10_000.0), 1 << 24),
+                new Case(256, SurfaceConfig.defaults(), 1 << 24, true),
+                new Case(256, SurfaceConfig.defaults(), 2_000, true),
+                new Case(128, fanKm(7_000.0), 1 << 24, false),
         };
         try (Parallel five = Parallel.of(5)) {
             for (Case c : cases) {
@@ -113,7 +117,9 @@ class SurfaceProcessesTest {
                 assertArrayEquals(a.elevationAboveSeaM(), b.elevationAboveSeaM());
                 assertArrayEquals(a.surface().depositM, b.surface().depositM);
                 assertEquals(a.surface().budget(), b.surface().budget());
-                assertTrue(b.surface().resumedWalks() > 0, "some walks made ahead were carried on");
+                if (c.resumes()) {
+                    assertTrue(b.surface().resumedWalks() > 0, "some walks made ahead were carried on");
+                }
             }
         }
     }
@@ -123,13 +129,28 @@ class SurfaceProcessesTest {
                 false);
     }
 
-    /** The default surface with turbidite aprons reaching {@code km}. */
-    private static SurfaceConfig apronKm(double km) {
-        SurfaceConfig d = SurfaceConfig.defaults();
-        return new SurfaceConfig(d.streamPowerK(), d.dischargeExponent(), d.slopeExponent(), d.reliefErosionK(),
-                d.transportK(), d.softSedimentFactor(), d.bareLandFactor(), d.glacialFactor(), d.shelfDepthM(),
-                d.shelfRadiusKm(), km, d.pelagicMPerMyr(), d.oozeMPerMyr(), d.ccdDepthM(), d.carbonateMPerMyr(),
-                d.carbonateDepthM(), d.carbonateMinTempC(), d.soilProductionMPerMyr(), d.soilDecayDepthM());
+    /** The default surface with turbidite fans {@code km} long (their walks reach three times as far). */
+    private static SurfaceConfig fanKm(double km) {
+        return with(with(SurfaceConfig.defaults(), "fanLengthKm", km), "fanLengthMaxKm", km);
+    }
+
+    /** {@code cfg} with one constant changed. */
+    static SurfaceConfig with(SurfaceConfig cfg, String name, double value) {
+        try {
+            RecordComponent[] parts = SurfaceConfig.class.getRecordComponents();
+            Object[] args = new Object[parts.length];
+            Class<?>[] types = new Class<?>[parts.length];
+            boolean found = false;
+            for (int p = 0; p < parts.length; p++) {
+                types[p] = parts[p].getType();
+                found |= parts[p].getName().equals(name);
+                args[p] = parts[p].getName().equals(name) ? value : parts[p].getAccessor().invoke(cfg);
+            }
+            assertTrue(found, name);
+            return SurfaceConfig.class.getDeclaredConstructor(types).newInstance(args);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
     }
 
     private static double crustKm3(PlateSimulation sim) {

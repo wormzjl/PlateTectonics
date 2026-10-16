@@ -87,12 +87,13 @@ Profiling a 31.25 km run (JFR) and counting the marine work first changed the pl
 | P5 | Dropped | Counted: 0.8% of mouths reach the whole-sea delta plain (2% of cells) |
 | P6 | Dropped | Spare rings cut carried-on walks by 20–27% but not the cells walked (the long walks remain); no faster |
 | P7 | Partly | Byte visited marks. Sea mask not merged; resume still uses the whole-grid walker |
-| P8 | Replaced | Workers flag cells already at shelf (87% of searched cells) or delta-top level in the record. Saves only ~1.7 s: the replay is bound by its serial pass over the record, not by elevation reads |
+| P8 | Replaced, then removed | Workers flagged cells already at shelf (87% of searched cells) or delta-top level in the record, saving ~1.7 s. D-41 removed the flags: fill levels now differ per cell and per mouth |
 | P9, P11 | Not done | |
 | P10 | Done | Runs along rows joined by union-find, on the workers; only enclosed regions are flooded |
 | — | Done | Found by profiling: water bodies (D-39) labelled the same way (~4 s); last subduction pair remembered (~3 s of `HashMap` lookups); eclogite, keel and rift-side loops on the workers |
+| H2, H3, H8, H12 | Done (D-41) | Built and tuned; see [Marine science plan § Outcome](Marine%20science%20plan.md#outcome). H9 waits for Phase 6 |
 
-What limits marine spreading now (~44 s at 31.25 km): the replay's serial pass over ~4.4 × 10⁹ recorded cells, and ~0.8 × 10⁹ cells of walks carried on by one thread. The next exact step would record a second stream holding only cells with room and replay that (estimated −10 s). It is best done after the [marine science changes](Marine%20science%20plan.md), which change the per-cell levels the flags use.
+What limited marine spreading after the exact speedups (~44 s at 31.25 km; D-41 has since made each mouth walk further, see the plan's outcome): the replay's serial pass over ~4.4 × 10⁹ recorded cells, and ~0.8 × 10⁹ cells of walks carried on by one thread. The next exact step would record a second stream holding only cells with room and replay that (estimated −10 s). It is best done after the [marine science changes](Marine%20science%20plan.md), which change the per-cell levels the flags use.
 
 ## L2 — Where things are
 

@@ -9,6 +9,13 @@ import com.platetectonics.geosim.field.FloatField;
  */
 public final class SeaLevel {
     public static final double EARTH_MEAN_OCEAN_DEPTH_M = 2_620.0;
+    /**
+     * Ocean water of a simulated planet unless set otherwise (D-41): Earth's plus 40 m. With Earth's water the
+     * simulated planets end with about 34% land on average (12 seeds at 78 km cells; Earth 29%): their
+     * continents stand low and flat, so a little more water floods a lot of them. With this much, 29.1% (and
+     * 27.9% over 8 seeds at 31.25 km), though single seeds range from 13% to 41%.
+     */
+    public static final double DEFAULT_OCEAN_DEPTH_M = 2_660.0;
     /** Histogram bin for the fast fill, m. */
     private static final double BIN_M = 1.0;
 

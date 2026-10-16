@@ -49,7 +49,7 @@ public final class Main {
         long seed = 42;
         int width = 1024;
         double scale = PlanetSpec.DEFAULT_SCALE;
-        double oceanDepth = SeaLevel.EARTH_MEAN_OCEAN_DEPTH_M;
+        double oceanDepth = SeaLevel.DEFAULT_OCEAN_DEPTH_M;
         double age = 4500;
         double frameEvery = 25;
         int gifWidth = 720;
@@ -215,10 +215,16 @@ public final class Main {
                     "sediment budget (10^9 km3): eroded %.2f -> land %.2f, sea %.2f (delta plains %.2f) | pelagic %.2f, carbonate %.2f%n",
                     sb.eroded() / 1e9, sb.landDeposit() / 1e9, sb.marineDeposit() / 1e9, sb.deltaPlain() / 1e9,
                     sb.pelagic() / 1e9, sb.carbonate() / 1e9);
+            double[] parts = sim.surface().marinePartsKm3();
+            System.out.printf(Locale.ROOT, "sea by part (10^9 km3): shelf %.2f, fan %.2f, delta top %.2f, drape %.2f, "
+                            + "shelf beyond the fan %.2f, enclosed seas %.2f, delta plain %.2f%n",
+                    parts[0] / 1e9, parts[1] / 1e9, parts[2] / 1e9, parts[3] / 1e9, parts[4] / 1e9, parts[5] / 1e9,
+                    parts[6] / 1e9);
             printTimeline(sim);
         }
         printHypsometry(sim);
         if (!platesOnly) {
+            printSeaFloor(sim);
             printBiomes(sim);
         }
         if (plates.flowBudgetExhausted()) {
@@ -412,6 +418,136 @@ public final class Main {
                         + "enclosed in one plate: %.1f%% of the surface%n",
                 ageSum / Math.max(1, oceanCells), 100.0 * old / Math.max(1, oceanCells),
                 100.0 * sim.plates().enclosedOceanCells() / e.length);
+    }
+
+    /**
+     * The sea floor against Earth: ocean area by depth, shelf width, sediment piles, land built from the sea,
+     * sea level and the water that ocean-floor sediment displaces (docs/design/04-surface-processes.md#sea-floor).
+     */
+    private static void printSeaFloor(PlanetSimulation sim) {
+        float[] e = sim.elevationAboveSeaM();
+        var flow = sim.surface().flow();
+        var lith = sim.plates().lithosphere();
+        int n = e.length;
+        int w = sim.grid().width();
+        int h = sim.grid().height();
+        double cellKm = sim.grid().cellKm();
+        boolean[] ocean = new boolean[n];
+        int oceanCells = 0;
+        int[] byDepth = new int[3];
+        int shallowOnContinents = 0;
+        int land = 0;
+        double displaced = 0.0;
+        for (int idx = 0; idx < n; idx++) {
+            if (e[idx] >= 0f) {
+                land++;
+            }
+            ocean[idx] = e[idx] < 0f && flow.isOcean(idx);
+            if (ocean[idx]) {
+                oceanCells++;
+                byDepth[-e[idx] <= 200f ? 0 : -e[idx] <= 3_000f ? 1 : 2]++;
+                if (-e[idx] <= 200f && lith.isContinental(idx)) {
+                    shallowOnContinents++;
+                }
+                if (!lith.isContinental(idx)) {
+                    displaced += com.platetectonics.geosim.tectonics.Isostasy.SEDIMENT_MARINE_FACTOR * lith.sedimentKm(idx) * 1000.0;
+                }
+            }
+        }
+        // shelf width: from each coastal sea cell through the sea to the nearest water deeper than 200 m
+        int[] dist = new int[n];
+        int[] queue = new int[n];
+        java.util.Arrays.fill(dist, -1);
+        int tail = 0;
+        for (int idx = 0; idx < n; idx++) {
+            if (ocean[idx] && -e[idx] > 200f) {
+                dist[idx] = 0;
+                queue[tail++] = idx;
+            }
+        }
+        for (int head = 0; head < tail; head++) {
+            int c = queue[head];
+            int i = c % w;
+            int j = c / w;
+            int[] nbs = {j * w + (i + 1) % w, j * w + (i + w - 1) % w, j > 0 ? c - w : -1, j < h - 1 ? c + w : -1};
+            for (int nb : nbs) {
+                if (nb >= 0 && ocean[nb] && dist[nb] < 0) {
+                    dist[nb] = dist[c] + 1;
+                    queue[tail++] = nb;
+                }
+            }
+        }
+        int[] bins = new int[6]; // < 1 cell, <= 100, <= 200, <= 400, > 400 km, no deep water
+        java.util.List<Double> widths = new java.util.ArrayList<>();
+        for (int idx = 0; idx < n; idx++) {
+            if (!ocean[idx] || !touchesLand(ocean, e, idx, w, h)) {
+                continue;
+            }
+            if (dist[idx] < 0) {
+                bins[5]++;
+                continue;
+            }
+            double km = dist[idx] * cellKm;
+            widths.add(km);
+            bins[dist[idx] == 0 ? 0 : km <= 100.0 ? 1 : km <= 200.0 ? 2 : km <= 400.0 ? 3 : 4]++;
+        }
+        int coast = 0;
+        for (int b : bins) {
+            coast += b;
+        }
+        java.util.Collections.sort(widths);
+        double mean = widths.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
+        double median = widths.isEmpty() ? 0.0 : widths.get(widths.size() / 2);
+        float maxOcean = 0f;
+        float maxCont = 0f;
+        for (int idx = 0; idx < n; idx++) {
+            if (lith.isContinental(idx)) {
+                maxCont = Math.max(maxCont, lith.sedimentKm(idx));
+            } else {
+                maxOcean = Math.max(maxOcean, lith.sedimentKm(idx));
+            }
+        }
+        double o = Math.max(1, oceanCells);
+        System.out.printf(Locale.ROOT, "ocean by depth: 0-200 m %.1f%% (%.0f%% of it on continental crust), 200-3,000 m %.1f%%, "
+                        + ">3,000 m %.1f%% (Earth ~7.5, 15, 77)%n",
+                100.0 * byDepth[0] / o, 100.0 * shallowOnContinents / Math.max(1, byDepth[0]), 100.0 * byDepth[1] / o,
+                100.0 * byDepth[2] / o);
+        double c = Math.max(1, coast);
+        System.out.printf(Locale.ROOT, "shelf width from the coast to 200 m: mean %.0f km, median %.0f km | <1 cell %.0f%%, "
+                        + "<=100 km %.0f%%, 100-200 %.0f%%, 200-400 %.0f%%, >400 %.0f%%, no deep water %.0f%% (Earth mean ~80 km)%n",
+                mean, median, 100.0 * bins[0] / c, 100.0 * bins[1] / c, 100.0 * bins[2] / c, 100.0 * bins[3] / c,
+                100.0 * bins[4] / c, 100.0 * bins[5] / c);
+        System.out.printf(Locale.ROOT, "thickest sediment: %.1f km on ocean floor, %.1f km on continents (Earth <= ~20 km) | "
+                        + "land built from the sea last step: %.0f km2%n",
+                maxOcean, maxCont, sim.surface().landFromSeaCells() * sim.grid().cellAreaKm2());
+        System.out.printf(Locale.ROOT, "sea level %.0f m on the datum | land %.1f%% of the surface (Earth 29%%) | "
+                        + "ocean-floor sediment displaces %.0f m of the mean ocean depth%n",
+                sim.plates().seaLevelM(), 100.0 * land / n, displaced / o);
+        // water for 29% land on this surface as it stands (the planet would answer by eroding and building
+        // differently, so it is a first guess): fill to the level with 29% of the cells above it
+        float[] sorted = e.clone();
+        java.util.Arrays.sort(sorted);
+        double level = sorted[(int) (0.71 * n)];
+        double now = 0.0;
+        double needed = 0.0;
+        for (float v : e) {
+            now += Math.max(0.0, -v);
+            needed += Math.max(0.0, level - v);
+        }
+        System.out.printf(Locale.ROOT, "ocean water: mean depth %.0f m now | 29%% land would take about %.0f m "
+                + "(sea level %+.0f m)%n", now / n, needed / n, level);
+    }
+
+    private static boolean touchesLand(boolean[] ocean, float[] e, int idx, int w, int h) {
+        int i = idx % w;
+        int j = idx / w;
+        int[] nbs = {j * w + (i + 1) % w, j * w + (i + w - 1) % w, j > 0 ? idx - w : -1, j < h - 1 ? idx + w : -1};
+        for (int nb : nbs) {
+            if (nb >= 0 && !ocean[nb] && e[nb] >= 0f) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Biome groups and aridity classes over land, for comparison with Earth. */

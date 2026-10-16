@@ -4,6 +4,7 @@ import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import com.platetectonics.geosim.history.WorldHistory;
+import com.platetectonics.geosim.terrain.SeaLevel;
 import com.platetectonics.geosim.world.MasterWorld;
 import com.platetectonics.geosim.world.PlanetSpec;
 
@@ -24,7 +25,8 @@ public record PlanetSettings(double metersPerBlock, int gridWidth, double ageMyr
             Codec.intRange(64, 2_560).optionalFieldOf("grid_width", 1_280).forGetter(PlanetSettings::gridWidth),
             Codec.doubleRange(100.0, 6_000.0).optionalFieldOf("age_myr", 4_500.0).forGetter(PlanetSettings::ageMyr),
             Codec.STRING.optionalFieldOf("history", "random").forGetter(PlanetSettings::history),
-            Codec.doubleRange(500.0, 6_000.0).optionalFieldOf("ocean_depth_m", 2_620.0).forGetter(PlanetSettings::oceanDepthM)
+            Codec.doubleRange(500.0, 6_000.0).optionalFieldOf("ocean_depth_m", SeaLevel.DEFAULT_OCEAN_DEPTH_M)
+                    .forGetter(PlanetSettings::oceanDepthM)
     ).apply(i, PlanetSettings::new));
 
     public PlanetSpec spec() {

@@ -87,11 +87,11 @@ TFC assigns `OverworldClimateModel` automatically. It reads our ChunkData averag
 | `planet_quick` | same, `grid_width` 512 | 78 km, a world in ~15 s |
 | `planet_tfc` | `platetectonics:planet_tfc` + `platetectonics:planet_tfc` | Loaded only with TFC (`neoforge:conditions` mod_loaded; the tag entry is `required: false`). Carries TFC's own `tfc_settings` (rock layers); `temperature_scale` is reset from S at load (333,333 at 30 m/block, D-7) |
 
-**Planet settings** (`planet` object; all optional): `meters_per_block` (30), `grid_width` (1,280), `age_myr` (4,500), `history` (random / earth), `ocean_depth_m` (2,620). The seed is the world seed.
+**Planet settings** (`planet` object; all optional): `meters_per_block` (30), `grid_width` (1,280), `age_myr` (4,500), `history` (random / earth), `ocean_depth_m` (2,660; D-41). The seed is the world seed.
 
 **Load or simulate** (`PlanetLoader`, on `ServerAboutToStartEvent`, before any level exists):
 - If `<world>/data/platetectonics/master.ptw` exists, it is read. A settings mismatch logs a warning and keeps the saved planet.
-- Otherwise the planet is simulated on all cores but one (~2 min at 31.25 km), saved, and then attached to the generator and its biome source.
+- Otherwise the planet is simulated on all cores but one (~4 min at 31.25 km since D-41), saved, and then attached to the generator and its biome source.
 - The first spawn is the mild, dry-land cell nearest the origin. Vanilla uses `LevelEvent.CreateSpawnPosition`; TFC uses `findSpawnBiome`.
 
 **Terrain** (`geosim-core` `TerrainSampler`; the stand-in for Tier 1.5 until Phase 5, D-34):

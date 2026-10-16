@@ -28,9 +28,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   <li><b>Transport</b> (headwaters first): rivers carry up to K_t Q S. Where they carry more they
  *       deposit, just enough that the steepened channel carries the rest (alluvial fans at mountain
  *       fronts, floodplains). Lakes trap sediment until they are full.</li>
- *   <li><b>Sea</b>: sediment reaching a river mouth builds the shelf out to the shelf depth, then spreads
- *       as turbidite aprons, then builds a delta top. Clay and dust settle everywhere; carbonate ooze above
- *       the compensation depth once calcareous plankton exist; reefs and platforms in warm shallow seas.</li>
+ *   <li><b>Sea</b> (D-41): sediment reaching a river mouth builds a sloping shelf as wide as its supply
+ *       (one cell on an active margin), sends a share past it to a turbidite fan under a continental slope,
+ *       builds a delta top, then drapes the fan. Clay and dust settle everywhere; carbonate ooze above the
+ *       compensation depth once calcareous plankton exist; reefs and platforms in clear, warm, shallow
+ *       seas, fastest near the surface.</li>
  *   <li><b>Weathering</b>: a regolith front advances (fast when hot and wet, slower under thick soil)
  *       and is stripped by erosion and ice: deep laterite profiles grow only on old, flat, tropical land.</li>
  * </ol>
@@ -52,16 +54,22 @@ public final class SurfaceProcesses {
     private final float[] lakeEvaporation;
     private final int[] spill;
     private final boolean[] closedSpill;
-    /** Marine spreading: sea cells in the order they were taken from one mouth. */
-    private final int[] queue;
-    private final int[] apron;
-    /** Marine spreading: river mouths of this step, in cell order. */
+    /** Marine spreading: river mouths of this step, in this step's scan order (see {@link #collectMouths}). */
     private final int[] mouths;
-    /** Marine spreading geometry, in cells: shelf radius squared, apron radius. */
-    private final long shelf2;
-    private final int apronRing;
+    /** Marine spreading, per mouth of the step: shelf radius and fan length (km), last ring of its walk. */
+    private final double[] shelfKm;
+    private final double[] fanKm;
+    private final int[] reach;
+    /** Marine spreading: cells within {@code activeMarginKm} of a trench or arc, this step. */
+    private final boolean[] activeMargin;
+    private final int[] marginScratch;
+    private final float[] supplyScratch;
+    /** Steps taken so far (the scan order of the mouths rotates with it). */
+    private int steps;
     /** Marine spreading: walks the sea from a mouth on the calling thread, over the whole grid. */
     private final SeaWalk seaWalk;
+    /** Marine spreading for real, on the calling thread. */
+    private final Replay replay = new Replay();
     /** Marine spreading: walks made ahead on worker threads, one buffer per worker. */
     private WalkSlot[] slots = new WalkSlot[0];
     /** Furthest ring a walk made ahead may reach (its visited window). */
@@ -77,16 +85,6 @@ public final class SurfaceProcesses {
     private final AtomicInteger aheadRecorded = new AtomicInteger();
     /** Walks made ahead that the calling thread carried on (for tests). */
     private long resumedWalks;
-    /**
-     * Shelf and delta-top levels this step. Spreading only adds sediment, so a sea cell at or above a level
-     * when a batch begins stays there until the batch ends: walks made ahead flag such cells in place of
-     * their distance ({@link #AT_SHELF}, {@link #AT_TOP}), and the spreading skips them without reading
-     * their elevation. A flagged cell's distance is never needed: it takes nothing at shelf level.
-     */
-    private double shelfLevelNow;
-    private double topLevelNow;
-    private static final int AT_SHELF = -1;
-    private static final int AT_TOP = -2;
     /** Mouths per batch: sized so a batch records about {@link #AHEAD_TARGET} cells. */
     private int aheadBatch = AHEAD_BATCH;
     private static final int AHEAD_TARGET = 1 << 23;
@@ -109,23 +107,6 @@ public final class SurfaceProcesses {
     private int[] aheadQueueEnd = new int[0];
     /** Marine spreading: the ring {@link #seaWalk} took last. */
     private final SeaWalk.Cells seaCells = new SeaWalk.Cells();
-    /**
-     * Cursor over the walk of the mouth being spread: cells {@code curPos..curEnd} of the walk made ahead
-     * (all rings up to {@code curWalkedTo}, or the whole walk if that is {@code Integer.MAX_VALUE}), then,
-     * once {@code live}, of the last ring {@link #seaWalk} took.
-     */
-    private int[] curCells;
-    private int[] curRings;
-    private int[] curDist2;
-    private int[] curQueue;
-    private int curQueueFrom;
-    private int curQueueEnd;
-    private int curStart;
-    private int curMouth;
-    private int curPos;
-    private int curEnd;
-    private int curWalkedTo;
-    private boolean live;
     private final double[] pelagicScratch;
     private final double[] carbonateScratch;
     private Parallel parallel = Parallel.SERIAL;
@@ -144,6 +125,12 @@ public final class SurfaceProcesses {
     private double pelagicKm3;
     private double carbonateKm3;
     private double deltaPlainKm3;
+    /**
+     * Marine spreading so far by part (D-41), km3: shelf, fan, delta top, drape, shelf built on beyond the fan,
+     * enclosed seas filled towards sea level, delta plain.
+     */
+    private final double[] marinePartsKm3 = new double[7];
+    private int landFromSeaCells;
 
     public SurfaceProcesses(CylinderGrid grid, SurfaceConfig cfg) {
         this.grid = grid;
@@ -162,13 +149,13 @@ public final class SurfaceProcesses {
         lakeEvaporation = new float[n];
         spill = new int[n];
         closedSpill = new boolean[n];
-        queue = new int[n];
-        apron = new int[n];
         mouths = new int[n];
-        double shelfCells = Math.max(1.0, cfg.shelfRadiusKm() / grid.cellKm());
-        double apronCells = Math.max(shelfCells + 1.0, cfg.apronRadiusKm() / grid.cellKm());
-        shelf2 = (long) (shelfCells * shelfCells);
-        apronRing = (int) apronCells;
+        shelfKm = new double[n];
+        fanKm = new double[n];
+        reach = new int[n];
+        activeMargin = new boolean[n];
+        marginScratch = new int[n];
+        supplyScratch = new float[n];
         seaWalk = new SeaWalk(grid.width(), grid.height(), flow.oceanMask(), -1);
         pelagicScratch = new double[n];
         carbonateScratch = new double[n];
@@ -186,9 +173,10 @@ public final class SurfaceProcesses {
         this.parallel = parallel;
         flow.setParallel(parallel);
         int threads = parallel.threads();
-        // walks made ahead cover the apron search (3 apron radii) and one ring more; the cells they queue
-        // lie one ring further out
-        int radius = 3 * apronRing + 3;
+        // walks made ahead cover the furthest a mouth reaches (the widest shelf, or 3 of the longest fan
+        // lengths) and one ring more; the cells they queue lie one ring further out
+        double cellKm = grid.cellKm();
+        int radius = (int) (Math.max(Math.max(cfg.shelfRadiusMaxKm(), cellKm), 3.0 * cfg.fanLengthMaxKm()) / cellKm) + 3;
         int window = SeaWalk.windowFits(grid.width(), radius) ? radius : -1;
         aheadMaxRing = window < 0 ? Integer.MAX_VALUE : radius - 2;
         slots = new WalkSlot[threads == 1 ? 0 : threads];
@@ -215,6 +203,7 @@ public final class SurfaceProcesses {
         double erodedNow = erode(lith, climate, g, dtMyr);
         double landNow = transport(lith, dtMyr);
         double[] marineNow = {0.0, 0.0};
+        markActiveMargins(lith);
         spreadAllMarine(lith, sea, marineNow);
         seaFloor(lith, climate, g, sea, dtMyr);
         weather(lith, climate, g, dtMyr);
@@ -229,6 +218,7 @@ public final class SurfaceProcesses {
             sum += erosionMPerMyr[flow.order[k]];
         }
         meanLandErosionMPerMyr = land == 0 ? 0.0 : sum / land;
+        steps++;
     }
 
     // ------------------------------------------------------------------ water
@@ -451,35 +441,138 @@ public final class SurfaceProcesses {
     private static final int AHEAD_BATCH = 8_192;
     /** Bands of columns per worker thread (more bands balance the work, fewer see more neighbours). */
     private static final int AHEAD_BANDS = 4;
+    /** e^(-x) for x = 0 .. 3 in steps of 1/1024: fan weights, the same bits on every machine. */
+    private static final double[] DECAY = new double[3 * 1024 + 2];
+
+    static {
+        for (int k = 0; k < DECAY.length; k++) {
+            DECAY[k] = StrictMath.exp(-k / 1024.0);
+        }
+    }
 
     /**
-     * Spreads the sediment of every river mouth, in cell order. Which sea cells a mouth takes, and in what
-     * order, depends only on the sea, never on what earlier mouths deposited; only where the walk stops
-     * does. So worker threads spread a batch of mouths ahead of time, each worker the mouths of a band of
-     * columns on its own copy of the sea floor, and record the walks they took; the mouths are then spread
-     * for real one after another along those walks. A walk that turns out too short (a mouth in another
-     * band filled the shelf it counted on) is carried on by the calling thread from where it ended: the
-     * planet is the same on any number of threads.
+     * Marks the sea cells within {@code activeMarginKm} of a trench or arc this step (a square around each):
+     * mouths there sit on an active margin.
      */
-    private void spreadAllMarine(Lithosphere lith, double sea, double[] totals) {
-        int n = grid.size();
+    private void markActiveMargins(Lithosphere lith) {
+        int w = grid.width();
+        int h = grid.height();
+        int r = (int) Math.round(cfg.activeMarginKm() / grid.cellKm());
+        int[] near = marginScratch;
+        int mask = Lithosphere.MARK_TRENCH | Lithosphere.MARK_ARC;
+        // along each row (across the date line): marked cells within r columns
+        parallel.rows(h, (from, to) -> {
+            for (int j = from; j < to; j++) {
+                int row = j * w;
+                if (2 * r + 1 >= w) {
+                    int any = 0;
+                    for (int i = 0; i < w; i++) {
+                        any += (lith.marks(row + i) & mask) != 0 ? 1 : 0;
+                    }
+                    for (int i = 0; i < w; i++) {
+                        near[row + i] = any;
+                    }
+                    continue;
+                }
+                int count = 0;
+                for (int d = -r; d <= r; d++) {
+                    count += (lith.marks(row + Math.floorMod(d, w)) & mask) != 0 ? 1 : 0;
+                }
+                for (int i = 0; i < w; i++) {
+                    near[row + i] = count;
+                    count -= (lith.marks(row + Math.floorMod(i - r, w)) & mask) != 0 ? 1 : 0;
+                    count += (lith.marks(row + Math.floorMod(i + r + 1, w)) & mask) != 0 ? 1 : 0;
+                }
+            }
+        });
+        // down each column: rows within r of a row that has one
+        parallel.range(w, 16, (from, to) -> {
+            for (int i = from; i < to; i++) {
+                int count = 0;
+                for (int j = 0; j <= Math.min(r, h - 1); j++) {
+                    count += near[j * w + i] > 0 ? 1 : 0;
+                }
+                for (int j = 0; j < h; j++) {
+                    activeMargin[j * w + i] = count > 0;
+                    if (j - r >= 0) {
+                        count -= near[(j - r) * w + i] > 0 ? 1 : 0;
+                    }
+                    if (j + r + 1 < h) {
+                        count += near[(j + r + 1) * w + i] > 0 ? 1 : 0;
+                    }
+                }
+            }
+        });
+    }
+
+    /**
+     * River mouths of this step. The scan order rotates through rows down or up and columns east or west, one
+     * per step, so no direction always comes first to a shared sea (neighbours stay together, which keeps the
+     * walks made ahead in step).
+     */
+    private int collectMouths() {
+        int w = grid.width();
+        int h = grid.height();
+        boolean up = (steps & 2) != 0;
+        boolean west = (steps & 1) != 0;
         int count = 0;
-        for (int idx = 0; idx < n; idx++) {
-            if (marineInput[idx] > 0f) {
-                mouths[count++] = idx;
+        for (int jj = 0; jj < h; jj++) {
+            int row = (up ? h - 1 - jj : jj) * w;
+            for (int ii = 0; ii < w; ii++) {
+                int idx = row + (west ? w - 1 - ii : ii);
+                if (marineInput[idx] > 0f) {
+                    mouths[count++] = idx;
+                }
             }
         }
-        shelfLevelNow = sea - cfg.shelfDepthM();
-        topLevelNow = sea - 1.0;
+        return count;
+    }
+
+    /**
+     * Shelf radius, fan length and walk reach of every mouth, from its supply relative to the step's median
+     * and from its margin: a mouth near a trench or arc gets a shelf one cell wide.
+     */
+    private void mouthShapes(int count) {
+        for (int m = 0; m < count; m++) {
+            supplyScratch[m] = marineInput[mouths[m]];
+        }
+        Arrays.sort(supplyScratch, 0, count);
+        double median = supplyScratch[count / 2];
+        double cellKm = grid.cellKm();
+        for (int m = 0; m < count; m++) {
+            int mouth = mouths[m];
+            double q = marineInput[mouth] / median;
+            double r = activeMargin[mouth] ? cellKm
+                    : Math.max(cfg.shelfRadiusMinKm(), Math.min(cfg.shelfRadiusMaxKm(),
+                    cfg.shelfRadiusKm() * StrictMath.pow(q, cfg.shelfSupplyExponent())));
+            double l = Math.max(cfg.fanLengthMinKm(), Math.min(cfg.fanLengthMaxKm(),
+                    cfg.fanLengthKm() * StrictMath.pow(q, cfg.fanSupplyExponent())));
+            shelfKm[m] = r;
+            fanKm[m] = l;
+            reach[m] = (int) (Math.max(r, 3.0 * l) / cellKm);
+        }
+    }
+
+    /**
+     * Spreads the sediment of every river mouth (D-41), one after another. Which sea cells a mouth takes, and
+     * in what order, depends only on the sea, never on what earlier mouths deposited; only where the walk
+     * stops does. So worker threads spread a batch of mouths ahead of time, each worker the mouths of a band
+     * of columns on its own copy of the sea floor, and record the walks they took; the mouths are then spread
+     * for real one after another along those walks. A walk that turns out too short (a mouth in another band
+     * changed the sea it counted on) is carried on by the calling thread from where it ended: the planet is
+     * the same on any number of threads.
+     */
+    private void spreadAllMarine(Lithosphere lith, double sea, double[] totals) {
+        int count = collectMouths();
+        if (count == 0) {
+            return;
+        }
+        mouthShapes(count);
         if (slots.length == 0) {
             for (int m = 0; m < count; m++) {
-                int mouth = mouths[m];
-                curMouth = mouth;
-                seaWalk.start(mouth);
-                curPos = 0;
-                curEnd = 0;
-                live = true;
-                spreadMarine(lith, mouth, marineInput[mouth], sea, totals);
+                replay.startLive(mouths[m]);
+                totals[1] += replay.spread(lith, m, sea);
+                totals[0] += marineInput[mouths[m]];
             }
             return;
         }
@@ -502,20 +595,11 @@ public final class SurfaceProcesses {
             aheadBatch = (int) Math.max(AHEAD_MIN_BATCH, Math.min(AHEAD_BATCH, next));
             for (int m = from; m < to; m++) {
                 int k = m - from;
-                SeaWalk.Cells cells = slots[aheadSlot[k]].cells;
-                curMouth = mouths[m];
-                curCells = cells.cells;
-                curRings = cells.rings;
-                curDist2 = cells.dist2;
-                curQueue = slots[aheadSlot[k]].queue;
-                curQueueFrom = aheadQueueFrom[k];
-                curQueueEnd = aheadQueueEnd[k];
-                curStart = aheadFrom[k];
-                curPos = aheadFrom[k];
-                curEnd = aheadEnd[k];
-                curWalkedTo = aheadRing[k];
-                live = false;
-                spreadMarine(lith, curMouth, marineInput[curMouth], sea, totals);
+                WalkSlot slot = slots[aheadSlot[k]];
+                replay.startRecorded(mouths[m], slot.rec, aheadFrom[k], aheadEnd[k], aheadRing[k], slot.queue,
+                        aheadQueueFrom[k], aheadQueueEnd[k]);
+                totals[1] += replay.spread(lith, m, sea);
+                totals[0] += marineInput[mouths[m]];
             }
             from = to;
         }
@@ -528,9 +612,9 @@ public final class SurfaceProcesses {
      */
     private void spreadAhead(Lithosphere lith, double sea, int from, int to) {
         for (WalkSlot slot : slots) {
-            slot.cells.len = 0;
+            slot.rec.len = 0;
             slot.queueLen = 0;
-            slot.cells.shrink(AHEAD_KEEP);
+            slot.rec.shrink(AHEAD_KEEP);
         }
         int w = grid.width();
         int bands = Math.min(w, AHEAD_BANDS * slots.length);
@@ -554,7 +638,7 @@ public final class SurfaceProcesses {
                     slot.clearFloor();
                     for (int q = bandStart[band]; q < bandStart[band + 1]; q++) {
                         int m = bandOrder[q];
-                        slot.spreadAhead(lith, sea, s, mouths[m], m - from);
+                        slot.spreadAhead(lith, sea, s, m, m - from);
                     }
                 }
             }
@@ -562,142 +646,450 @@ public final class SurfaceProcesses {
     }
 
     /**
-     * Builds shelf, apron and delta top from one river mouth; adds to {@code totals} (deposited, of it
-     * above sea level). Sea cells are taken nearest first by straight-line distance from the mouth (reached
-     * through the sea, edge to edge; {@link SeaWalk}), so shelves and deltas grow as round fans.
+     * One mouth's marine spreading (D-41) along its walk from the mouth ({@link SeaWalk}): nearest cells first
+     * by straight-line distance through the sea, so shelves, fans and deltas grow round. The calling thread
+     * spreads for real ({@link Replay}); worker threads run the same code on their own copy of the sea floor
+     * to learn how far each walk goes ({@link WalkSlot}).
      */
-    private void spreadMarine(Lithosphere lith, int mouth, double volume, double sea, double[] totals) {
-        double shelfLevel = sea - cfg.shelfDepthM();
-        int visited = 0;
-        int apronCount = 0;
-        // with no deep water in reach yet, keep looking further out before building delta top
-        int reach = 3 * apronRing;
-        double left = volume;
-        // the cursor in locals; back in its fields only when more cells are needed
-        int[] cells = curCells;
-        int[] rings = curRings;
-        int[] dist2 = curDist2;
-        int pos = curPos;
-        int end = curEnd;
-        while (left > 0.0) {
-            if (pos == end) {
-                curPos = pos;
-                if (!more(reach)) {
+    private abstract class Spreader {
+        /** The walk under the cursor: cells {@code pos..end} of these arrays. */
+        int[] cells;
+        int[] rings;
+        int[] dist2;
+        int pos;
+        int end;
+        /** This mouth's cells in walk order: all it visited, its delta top, its fan (with weight and cap). */
+        int[] visit = new int[1 << 12];
+        int[] delta = new int[1 << 8];
+        int[] fan = new int[1 << 10];
+        double[] fanWeight = new double[1 << 10];
+        double[] fanCap = new double[1 << 10];
+        /** Fan filling: each fan cell's room (km3) and surface rise per unit, and the cells not yet full. */
+        double[] room = new double[1 << 10];
+        double[] roomFs = new double[1 << 10];
+        int[] active = new int[1 << 10];
+
+        /** Puts more of the walk under the cursor, rings up to {@code maxRing}; false if there are none. */
+        abstract boolean more(int maxRing);
+
+        /** Sea floor elevation of cell {@code c}, m on the datum. */
+        abstract float elevation(int c);
+
+        /** Deposits {@code km} of sediment on {@code c}; {@code fs}: surface rise per unit on its crust. */
+        abstract void deposit(Lithosphere lith, int c, double km, double fs);
+
+        /** What one mouth's spreading put where, km3 (in the order of {@link #marinePartsKm3}). */
+        void account(double shelf, double fan, double top, double drape, double prograde, double brim, double plain) {
+        }
+
+        /** What the two passes beyond the fan took. */
+        private final double[] taken = new double[2];
+
+        /**
+         * Spreads mouth {@code m}'s sediment; returns the part that built a delta plain over a full sea (km3).
+         * <ol>
+         *   <li>Shelf: walking out to the mouth's reach, cells within the shelf radius R fill nearest first to a
+         *       ramp, {@code rampTopM} deep at the mouth and the shelf break at R, with the shelf's share.
+         *       Deeper cells beyond R, within 3 fan lengths L, are noted for the fan.</li>
+         *   <li>Fan: the bypass share and what the shelf could not hold, shared by weight e^(-d/L), none built
+         *       above a continental slope from the shelf break at R ({@code slopeMPerKm} down to
+         *       {@code slopeFootM}) and a gentler rise beyond ({@code riseMPerKm}).</li>
+         *   <li>Delta top: the shelf within {@code deltaRadiusKm} of the mouth (the mouth cell alone by default)
+         *       builds to {@code deltaTopM} above sea level: land.</li>
+         *   <li>Drape: the rest raises the fan's slope and rise by one height everywhere, never above the shelf
+         *       break: the margin builds up and out as a whole rather than as a plateau at the shelf break.</li>
+         *   <li>Beyond the fan: the shelf builds on at the shelf break, nearest first, as far as it takes. A sea
+         *       that is full to the shelf break all over (an enclosed sea) fills on to 1 m below sea level, then a
+         *       delta plain over all of it.</li>
+         * </ol>
+         */
+        final double spread(Lithosphere lith, int m, double sea) {
+            double volume = marineInput[mouths[m]];
+            double cellKm = grid.cellKm();
+            double rKm = shelfKm[m];
+            double lKm = fanKm[m];
+            int last = reach[m];
+            double shelfCells = rKm / cellKm;
+            double shelf2 = shelfCells * shelfCells;
+            double deltaCells = cfg.deltaRadiusKm() / cellKm;
+            double delta2 = deltaCells * deltaCells;
+            double fanCells = 3.0 * lKm / cellKm;
+            double fan2 = fanCells * fanCells;
+            double shelfBreak = sea - cfg.shelfDepthM();
+            double rampTop = sea - cfg.rampTopM();
+            double rampPerKm = (cfg.shelfDepthM() - cfg.rampTopM()) / rKm;
+            double slope = cfg.slopeMPerKm();
+            double foot = cfg.slopeFootM();
+            double rise = cfg.riseMPerKm();
+            double footKm = foot / slope;
+            double shelfLeft = volume * (1.0 - cfg.bypassFraction());
+            int visited = 0;
+            int deltaCount = 0;
+            int fanCount = 0;
+            int[] visit = this.visit;
+            int[] cells = this.cells;
+            int[] rings = this.rings;
+            int[] dist2 = this.dist2;
+            int pos = this.pos;
+            int end = this.end;
+            while (true) {
+                if (pos == end) {
+                    this.pos = pos;
+                    if (!more(last)) {
+                        break;
+                    }
+                    cells = this.cells;
+                    rings = this.rings;
+                    dist2 = this.dist2;
+                    pos = this.pos;
+                    end = this.end;
+                }
+                if (rings[pos] > last) {
                     break;
                 }
-                cells = curCells;
-                rings = curRings;
-                dist2 = curDist2;
-                pos = curPos;
-                end = curEnd;
-            }
-            if (rings[pos] > reach) {
-                break;
-            }
-            int c = cells[pos];
-            int d2 = dist2[pos++];
-            if (d2 < 0) {
-                // flagged by the walk made ahead (see shelfLevelNow); full to the delta top: skipped there too
-                queue[visited++] = d2 == AT_TOP ? ~c : c;
-                continue;
-            }
-            queue[visited++] = c;
-            if (d2 <= shelf2) {
-                left -= fillTo(lith, c, shelfLevel, left);
-            } else if (elevation[c] < shelfLevel) {
-                apron[apronCount++] = c;
-                reach = apronRing;
-            }
-        }
-        if (left > 0.0 && apronCount > 0) {
-            left = fillApron(lith, apronCount, shelfLevel, left);
-        }
-        // a sea already filled to shelf depth: the delta top builds to sea level, prograding across the
-        // sea as far as it takes, then the delta plain rises above it
-        double topLevel = sea - 1.0;
-        for (int q = 0; q < visited && left > 0.0; q++) {
-            int c = queue[q];
-            if (c >= 0) {
-                left -= fillTo(lith, c, topLevel, left);
-            }
-        }
-        while (left > 0.0) {
-            if (pos == end) {
-                curPos = pos;
-                if (!more(Integer.MAX_VALUE)) {
-                    break;
+                int c = cells[pos];
+                int d2 = dist2[pos++];
+                if (visited == visit.length) {
+                    visit = this.visit = Arrays.copyOf(visit, 2 * visited);
                 }
-                cells = curCells;
-                dist2 = curDist2;
-                pos = curPos;
-                end = curEnd;
+                visit[visited++] = c;
+                if (d2 <= shelf2) {
+                    if (d2 <= delta2) {
+                        if (deltaCount == delta.length) {
+                            delta = Arrays.copyOf(delta, 2 * deltaCount);
+                        }
+                        delta[deltaCount++] = c;
+                    }
+                    if (shelfLeft > 0.0) {
+                        shelfLeft -= fillTo(lith, c, rampTop - rampPerKm * Math.sqrt(d2) * cellKm, shelfLeft);
+                    }
+                } else if (d2 <= fan2 && elevation(c) < shelfBreak) {
+                    if (fanCount == fan.length) {
+                        fan = Arrays.copyOf(fan, 2 * fanCount);
+                        fanWeight = Arrays.copyOf(fanWeight, 2 * fanCount);
+                        fanCap = Arrays.copyOf(fanCap, 2 * fanCount);
+                    }
+                    double dKm = Math.sqrt(d2) * cellKm;
+                    fan[fanCount] = c;
+                    fanWeight[fanCount] = DECAY[(int) (dKm / lKm * 1024.0 + 0.5)];
+                    double x = dKm - rKm;
+                    fanCap[fanCount] = shelfBreak - (x <= footKm ? slope * x : foot + rise * (x - footKm));
+                    fanCount++;
+                }
             }
-            int c = cells[pos];
-            if (dist2[pos++] == AT_TOP) {
-                queue[visited++] = ~c;
-                continue;
+            this.pos = pos;
+            double shelfTaken = volume * (1.0 - cfg.bypassFraction()) - shelfLeft;
+            double left = shelfLeft + volume * cfg.bypassFraction();
+            double before = left;
+            if (fanCount > 0) {
+                left = fillFan(lith, fanCount, left);
             }
-            queue[visited++] = c;
-            left -= fillTo(lith, c, topLevel, left);
-        }
-        curPos = pos;
-        if (left > 0.0) {
+            double fanTaken = before - left;
+            before = left;
+            double top = sea + cfg.deltaTopM();
+            for (int s = 0; s < deltaCount && left > 0.0; s++) {
+                left -= fillTo(lith, delta[s], top, left);
+            }
+            double topTaken = before - left;
+            before = left;
+            if (left > 0.0 && fanCount > 0) {
+                left = raiseFan(lith, fanCount, left, shelfBreak);
+            }
+            double drapeTaken = before - left;
+            // beyond the fan: the shelf progrades at the shelf break, nearest first, as far as it takes; only a sea
+            // that is that full all over (an enclosed sea) fills on to 1 m below sea level
+            double[] taken = this.taken;
+            for (int pass = 0; pass < 2; pass++) {
+                before = left;
+                double level = pass == 0 ? shelfBreak : sea - 1.0;
+                for (int q = 0; q < visited && left > 0.0; q++) {
+                    left -= fillTo(lith, visit[q], level, left);
+                }
+                cells = this.cells;
+                pos = this.pos;
+                end = this.end;
+                while (left > 0.0) {
+                    if (pos == end) {
+                        this.pos = pos;
+                        if (!more(Integer.MAX_VALUE)) {
+                            break;
+                        }
+                        cells = this.cells;
+                        pos = this.pos;
+                        end = this.end;
+                    }
+                    int c = cells[pos++];
+                    if (visited == visit.length) {
+                        visit = this.visit = Arrays.copyOf(visit, 2 * visited);
+                    }
+                    visit[visited++] = c;
+                    left -= fillTo(lith, c, level, left);
+                }
+                this.pos = pos;
+                taken[pass] = before - left;
+            }
+            if (left <= 0.0) {
+                account(shelfTaken, fanTaken, topTaken, drapeTaken, taken[0], taken[1], 0.0);
+                return 0.0;
+            }
+            account(shelfTaken, fanTaken, topTaken, drapeTaken, taken[0], taken[1], left);
             double km = left / visited / grid.cellAreaKm2();
             for (int q = 0; q < visited; q++) {
-                int c = queue[q];
-                depositKm(lith, c < 0 ? ~c : c, km);
+                int c = visit[q];
+                deposit(lith, c, km, fs(lith, c));
             }
-            totals[1] += left;
+            return left;
         }
-        totals[0] += volume;
+
+        /**
+         * Shares {@code left} among the fan cells by weight, none built above its cap on the slope and rise: a full
+         * cell passes the rest of its share on to the others, until none is left over. Each cell then takes
+         * min(w x, room) with one x for all (water filling). Returns the volume that did not fit, km3.
+         */
+        private double fillFan(Lithosphere lith, int count, double left) {
+            if (room.length < count) {
+                room = new double[fan.length];
+                roomFs = new double[fan.length];
+                active = new int[fan.length];
+            }
+            double area = grid.cellAreaKm2();
+            double roomSum = 0.0;
+            double weightSum = 0.0;
+            for (int k = 0; k < count; k++) {
+                int c = fan[k];
+                double level = fanCap[k];
+                float e = elevation(c);
+                double fs = fs(lith, c);
+                double r = e >= level ? 0.0 : (level - e) / (fs * 1000.0) * area;
+                room[k] = r;
+                roomFs[k] = fs;
+                roomSum += r;
+                weightSum += fanWeight[k];
+                active[k] = k;
+            }
+            double x = Double.POSITIVE_INFINITY;
+            if (roomSum > left) {
+                // the cells too full for their share at this x take their room; the rest is shared again
+                int n = count;
+                double rest = left;
+                double weight = weightSum;
+                while (true) {
+                    double share = rest / weight;
+                    int still = 0;
+                    double kept = 0.0;
+                    for (int a = 0; a < n; a++) {
+                        int k = active[a];
+                        if (room[k] < fanWeight[k] * share) {
+                            rest -= room[k];
+                        } else {
+                            active[still++] = k;
+                            kept += fanWeight[k];
+                        }
+                    }
+                    if (still == n || still == 0) {
+                        x = still == n ? share : Double.POSITIVE_INFINITY;
+                        break;
+                    }
+                    n = still;
+                    weight = kept;
+                }
+            }
+            for (int k = 0; k < count && left > 0.0; k++) {
+                double d = Math.min(left, Math.min(room[k], fanWeight[k] * x));
+                if (d > 0.0) {
+                    deposit(lith, fan[k], d / area, roomFs[k]);
+                    left -= d;
+                }
+            }
+            return Math.max(0.0, left);
+        }
+
+        /**
+         * Raises the fan's slope and rise by the height h that holds {@code left}: each fan cell fills to its cap
+         * plus h, but never above the shelf break. The volume held grows with h piecewise linearly; h is found by
+         * regula falsi (Illinois) to within a millimetre, and the last cells take what is left. Returns the volume
+         * that did not fit (the fan is full to the shelf break), km3.
+         */
+        private double raiseFan(Lithosphere lith, int count, double left, double shelfBreak) {
+            double area = grid.cellAreaKm2();
+            double full = 0.0;
+            double hi = 0.0;
+            for (int k = 0; k < count; k++) {
+                int c = fan[k];
+                double fs = fs(lith, c);
+                double e = elevation(c);
+                room[k] = e;
+                roomFs[k] = fs;
+                full += Math.max(0.0, shelfBreak - e) / (fs * 1000.0) * area;
+                hi = Math.max(hi, shelfBreak - fanCap[k]);
+            }
+            if (full > left) {
+                double lo = 0.0;
+                double vLo = raised(count, 0.0, shelfBreak);
+                double vHi = full;
+                int kept = 0;
+                for (int it = 0; it < 100 && hi - lo > 1e-3; it++) {
+                    double h = lo + (left - vLo) / (vHi - vLo) * (hi - lo);
+                    double v = raised(count, h, shelfBreak);
+                    if (v < left) {
+                        lo = h;
+                        vLo = v;
+                        if (kept < 0) {
+                            vHi = left + (vHi - left) / 2.0;
+                        }
+                        kept = -1;
+                    } else {
+                        hi = h;
+                        vHi = v;
+                        if (kept > 0) {
+                            vLo = left - (left - vLo) / 2.0;
+                        }
+                        kept = 1;
+                    }
+                }
+            }
+            for (int k = 0; k < count && left > 0.0; k++) {
+                double level = Math.min(shelfBreak, fanCap[k] + hi);
+                double d = Math.min(left, Math.max(0.0, level - room[k]) / (roomFs[k] * 1000.0) * area);
+                if (d > 0.0) {
+                    deposit(lith, fan[k], d / area, roomFs[k]);
+                    left -= d;
+                }
+            }
+            return Math.max(0.0, left);
+        }
+
+        /** Volume the fan holds with its slope and rise raised by {@code h} (see {@link #raiseFan}), km3. */
+        private double raised(int count, double h, double shelfBreak) {
+            double sum = 0.0;
+            for (int k = 0; k < count; k++) {
+                double level = Math.min(shelfBreak, fanCap[k] + h);
+                if (level > room[k]) {
+                    sum += (level - room[k]) / (roomFs[k] * 1000.0);
+                }
+            }
+            return sum * grid.cellAreaKm2();
+        }
+
+        /** Fills cell {@code c} up to {@code level} with at most {@code available} km3; returns what it took. */
+        final double fillTo(Lithosphere lith, int c, double level, double available) {
+            float e = elevation(c);
+            if (e >= level) {
+                return 0.0;
+            }
+            double fs = fs(lith, c);
+            double room = (level - e) / (fs * 1000.0) * grid.cellAreaKm2();
+            double d = Math.min(available, room);
+            deposit(lith, c, d / grid.cellAreaKm2(), fs);
+            return d;
+        }
     }
 
-    /**
-     * Puts the next ring of the walk under the cursor, if there is one and it is at most {@code maxRing};
-     * the cursor must have used up the cells it had.
-     */
-    private boolean more(int maxRing) {
-        if (!live) {
-            // the next cell lies beyond the last whole ring walked ahead
-            if (curWalkedTo == Integer.MAX_VALUE || maxRing <= curWalkedTo) {
+    private static double fs(Lithosphere lith, int c) {
+        return lith.isContinental(c) ? Isostasy.SEDIMENT_LAND_FACTOR : Isostasy.SEDIMENT_MARINE_FACTOR;
+    }
+
+    /** Marine spreading for real on the calling thread, along a walk made ahead or one it walks itself. */
+    private final class Replay extends Spreader {
+        /** The walk made ahead: first cell in the arrays, last whole ring, and the cells it had queued. */
+        private int start;
+        private int walkedTo;
+        private int[] queued;
+        private int queuedFrom;
+        private int queuedTo;
+        private int mouth;
+        /** Walking itself ({@link #seaWalk}) rather than reading the walk made ahead. */
+        private boolean live;
+
+        void startLive(int mouth) {
+            this.mouth = mouth;
+            seaWalk.start(mouth);
+            live = true;
+            pos = 0;
+            end = 0;
+        }
+
+        void startRecorded(int mouth, SeaWalk.Cells rec, int from, int to, int walkedTo, int[] queued, int queuedFrom,
+                           int queuedTo) {
+            this.mouth = mouth;
+            cells = rec.cells;
+            rings = rec.rings;
+            dist2 = rec.dist2;
+            start = from;
+            pos = from;
+            end = to;
+            this.walkedTo = walkedTo;
+            this.queued = queued;
+            this.queuedFrom = queuedFrom;
+            this.queuedTo = queuedTo;
+            live = false;
+        }
+
+        @Override
+        boolean more(int maxRing) {
+            if (!live) {
+                // the next cell lies beyond the last whole ring walked ahead
+                if (walkedTo == Integer.MAX_VALUE || maxRing <= walkedTo) {
+                    return false;
+                }
+                // that walk was too short: carry it on here
+                seaWalk.resume(mouth, walkedTo, cells, start, end, queued, queuedFrom, queuedTo);
+                live = true;
+                resumedWalks++;
+            }
+            if (!seaWalk.hasNext() || seaWalk.upcomingRing() > maxRing) {
                 return false;
             }
-            // that walk was too short: carry it on here
-            seaWalk.resume(curMouth, curWalkedTo, curCells, curStart, curEnd, curQueue, curQueueFrom, curQueueEnd);
-            live = true;
-            resumedWalks++;
+            seaCells.len = 0;
+            seaWalk.takeRing(seaCells);
+            cells = seaCells.cells;
+            rings = seaCells.rings;
+            dist2 = seaCells.dist2;
+            pos = 0;
+            end = seaCells.len;
+            return true;
         }
-        if (!seaWalk.hasNext() || seaWalk.upcomingRing() > maxRing) {
-            return false;
+
+        @Override
+        float elevation(int c) {
+            return elevation[c];
         }
-        seaCells.len = 0;
-        seaWalk.takeRing(seaCells);
-        curCells = seaCells.cells;
-        curRings = seaCells.rings;
-        curDist2 = seaCells.dist2;
-        curPos = 0;
-        curEnd = seaCells.len;
-        return true;
+
+        @Override
+        void account(double shelf, double fan, double top, double drape, double prograde, double brim, double plain) {
+            double[] parts = marinePartsKm3;
+            parts[0] += shelf;
+            parts[1] += fan;
+            parts[2] += top;
+            parts[3] += drape;
+            parts[4] += prograde;
+            parts[5] += brim;
+            parts[6] += plain;
+        }
+
+        @Override
+        void deposit(Lithosphere lith, int c, double km, double fs) {
+            depositKm(lith, c, km, fs);
+        }
     }
 
     /**
      * One worker of marine spreading ahead: its sea walker, the walks it recorded this batch, and the sea
      * floor as its spreading ahead left it in the band it is working on.
      */
-    private final class WalkSlot {
+    private final class WalkSlot extends Spreader {
         final SeaWalk walk;
-        final SeaWalk.Cells cells = new SeaWalk.Cells();
+        final SeaWalk.Cells rec = new SeaWalk.Cells();
         /** For each walk recorded, the cells it had queued for the next ring (to carry it on). */
         int[] queue = new int[1 << 12];
         int queueLen;
         /**
-         * Elevation of the cells the spreading ahead changed in this band, computed exactly as
-         * {@link SurfaceProcesses#spreadMarine} computes it; NaN elsewhere (as {@link SurfaceProcesses#elevation}).
+         * Elevation of the cells the spreading ahead changed in this band, computed exactly as the spreading
+         * for real computes it; NaN elsewhere (as {@link SurfaceProcesses#elevation}).
          */
         final float[] floor = new float[grid.size()];
         int[] touched = new int[1 << 12];
         int touchedCount;
-        int[] deep = new int[1 << 12];
 
         WalkSlot(SeaWalk walk) {
             this.walk = walk;
@@ -711,23 +1103,23 @@ public final class SurfaceProcesses {
             touchedCount = 0;
         }
 
-        private float elevation(int c) {
-            float e = floor[c];
-            return e != e ? elevation[c] : e;
-        }
-
         /**
-         * Records the walk from {@code mouth} for mouth {@code k} of the batch, spreading its sediment on the
-         * sea floor as this worker sees it.
+         * Records the walk from mouth {@code m} (number {@code k} of the batch), spreading its sediment on the
+         * sea floor as this worker sees it: every ring the spreading took, plus one more.
          */
-        void spreadAhead(Lithosphere lith, double sea, int s, int mouth, int k) {
-            SeaWalk.Cells rec = cells;
-            walk.start(mouth);
+        void spreadAhead(Lithosphere lith, double sea, int s, int m, int k) {
+            walk.start(mouths[m]);
             int first = rec.len;
             aheadSlot[k] = s;
             aheadFrom[k] = first;
+            cells = rec.cells;
+            rings = rec.rings;
+            dist2 = rec.dist2;
+            pos = first;
+            end = first;
             if (aheadRecorded.get() < aheadCells) {
-                spread(lith, sea, mouth, first);
+                spread(lith, m, sea);
+                take(Integer.MAX_VALUE);
                 aheadRecorded.addAndGet(rec.len - first);
             } else {
                 // this batch has recorded its share: the mouth alone, the calling thread walks on from there
@@ -749,58 +1141,16 @@ public final class SurfaceProcesses {
             aheadQueueEnd[k] = queueLen;
         }
 
-        /**
-         * {@link SurfaceProcesses#spreadMarine} on the sea floor as this worker sees it, recording the walk
-         * from cell {@code first} of {@link #cells}: every ring it took, plus one more.
-         */
-        private void spread(Lithosphere lith, double sea, int mouth, int first) {
-            SeaWalk.Cells rec = cells;
-            double shelfLevel = sea - cfg.shelfDepthM();
-            int pos = first;
-            int deepCount = 0;
-            int reach = 3 * apronRing;
-            double left = marineInput[mouth];
-            while (left > 0.0 && (pos < rec.len || take(reach))) {
-                if (rec.rings[pos] > reach) {
-                    break;
-                }
-                int c = rec.cells[pos];
-                int d2 = rec.dist2[pos++];
-                if (d2 < 0) {
-                    continue;
-                }
-                if (d2 <= shelf2) {
-                    left -= fillTo(lith, c, shelfLevel, left);
-                } else if (elevation(c) < shelfLevel) {
-                    if (deepCount == deep.length) {
-                        deep = Arrays.copyOf(deep, 2 * deepCount);
-                    }
-                    deep[deepCount++] = c;
-                    reach = apronRing;
-                }
+        @Override
+        boolean more(int maxRing) {
+            if (!take(maxRing)) {
+                return false;
             }
-            if (left > 0.0 && deepCount > 0) {
-                left = fillApron(lith, deepCount, shelfLevel, left);
-            }
-            double topLevel = sea - 1.0;
-            for (int q = first; q < pos && left > 0.0; q++) {
-                if (rec.dist2[q] != AT_TOP) {
-                    left -= fillTo(lith, rec.cells[q], topLevel, left);
-                }
-            }
-            while (left > 0.0 && (pos < rec.len || take(Integer.MAX_VALUE))) {
-                if (rec.dist2[pos] != AT_TOP) {
-                    left -= fillTo(lith, rec.cells[pos], topLevel, left);
-                }
-                pos++;
-            }
-            if (left > 0.0) {
-                double km = left / (pos - first) / grid.cellAreaKm2();
-                for (int q = first; q < pos; q++) {
-                    depositKm(lith, rec.cells[q], km);
-                }
-            }
-            take(Integer.MAX_VALUE);
+            cells = rec.cells;
+            rings = rec.rings;
+            dist2 = rec.dist2;
+            end = rec.len;
+            return true;
         }
 
         /** Records the next ring if there is one, it is at most {@code maxRing} and stays in the window. */
@@ -812,104 +1162,28 @@ public final class SurfaceProcesses {
             if (r > maxRing || r > aheadMaxRing) {
                 return false;
             }
-            int from = cells.len;
-            walk.takeRing(cells);
-            // flag the cells at shelf or delta-top level when the batch began (see shelfLevelNow)
-            int[] taken = cells.cells;
-            int[] dist2 = cells.dist2;
-            float[] e = elevation;
-            double shelf = shelfLevelNow;
-            double top = topLevelNow;
-            for (int q = from; q < cells.len; q++) {
-                float h = e[taken[q]];
-                if (h >= shelf) {
-                    dist2[q] = h >= top ? AT_TOP : AT_SHELF;
-                }
-            }
+            walk.takeRing(rec);
             return true;
         }
 
-        private double fillApron(Lithosphere lith, int count, double level, double left) {
-            int active = count;
-            while (left > 0.0 && active > 0) {
-                double share = left / active;
-                int stillDeep = 0;
-                for (int a = 0; a < active; a++) {
-                    int c = deep[a];
-                    double d = fillTo(lith, c, level, share);
-                    left -= d;
-                    if (d >= share) {
-                        deep[stillDeep++] = c;
-                    }
-                }
-                if (stillDeep == active) {
-                    return 0.0;
-                }
-                active = stillDeep;
-            }
-            return Math.max(0.0, left);
+        @Override
+        float elevation(int c) {
+            float e = floor[c];
+            return e != e ? elevation[c] : e;
         }
 
-        private double fillTo(Lithosphere lith, int idx, double level, double available) {
-            float e = elevation(idx);
-            if (e >= level) {
-                return 0.0;
-            }
-            double fs = lith.isContinental(idx) ? Isostasy.SEDIMENT_LAND_FACTOR : Isostasy.SEDIMENT_MARINE_FACTOR;
-            double room = (level - e) / (fs * 1000.0) * grid.cellAreaKm2();
-            double d = Math.min(available, room);
-            depositKm(lith, idx, d / grid.cellAreaKm2());
-            return d;
-        }
-
-        private void depositKm(Lithosphere lith, int idx, double km) {
-            double fs = lith.isContinental(idx) ? Isostasy.SEDIMENT_LAND_FACTOR : Isostasy.SEDIMENT_MARINE_FACTOR;
-            float e = floor[idx];
+        @Override
+        void deposit(Lithosphere lith, int c, double km, double fs) {
+            float e = floor[c];
             if (e != e) {
-                e = elevation[idx];
+                e = elevation[c];
                 if (touchedCount == touched.length) {
                     touched = Arrays.copyOf(touched, 2 * touchedCount);
                 }
-                touched[touchedCount++] = idx;
+                touched[touchedCount++] = c;
             }
-            floor[idx] = e + (float) (fs * 1000.0 * km);
+            floor[c] = e + (float) (fs * 1000.0 * km);
         }
-    }
-
-    /**
-     * Turbidite aprons: equal shares over the deep cells in reach, none built above {@code level} (a full
-     * cell passes its share on to the others). Returns the volume that did not fit, km3.
-     */
-    private double fillApron(Lithosphere lith, int count, double level, double left) {
-        int active = count;
-        while (left > 0.0 && active > 0) {
-            double share = left / active;
-            int stillDeep = 0;
-            for (int a = 0; a < active; a++) {
-                int c = apron[a];
-                double d = fillTo(lith, c, level, share);
-                left -= d;
-                if (d >= share) {
-                    apron[stillDeep++] = c;
-                }
-            }
-            if (stillDeep == active) {
-                return 0.0; // every cell took its full share
-            }
-            active = stillDeep;
-        }
-        return Math.max(0.0, left);
-    }
-
-    private double fillTo(Lithosphere lith, int idx, double level, double available) {
-        if (elevation[idx] >= level) {
-            return 0.0;
-        }
-        double fs = lith.isContinental(idx) ? Isostasy.SEDIMENT_LAND_FACTOR : Isostasy.SEDIMENT_MARINE_FACTOR;
-        double room = (level - elevation[idx]) / (fs * 1000.0) * grid.cellAreaKm2();
-        double d = Math.min(available, room);
-        depositKm(lith, idx, d / grid.cellAreaKm2(), fs);
-        return d;
     }
 
     /**
@@ -918,11 +1192,7 @@ public final class SurfaceProcesses {
      * into continental crust would make unsinkable crust out of sediment alone.
      */
     private void deposit(Lithosphere lith, int idx, double km3) {
-        depositKm(lith, idx, km3 / grid.cellAreaKm2());
-    }
-
-    private void depositKm(Lithosphere lith, int idx, double km) {
-        depositKm(lith, idx, km, lith.isContinental(idx) ? Isostasy.SEDIMENT_LAND_FACTOR : Isostasy.SEDIMENT_MARINE_FACTOR);
+        depositKm(lith, idx, km3 / grid.cellAreaKm2(), fs(lith, idx));
     }
 
     /** {@code fs}: surface rise per unit of sediment on this crust. */
@@ -936,7 +1206,11 @@ public final class SurfaceProcesses {
     private void seaFloor(Lithosphere lith, Climate climate, GlobalState g, double sea, double dt) {
         double area = grid.cellAreaKm2();
         boolean ooze = g.has(Milestone.CALCAREOUS_PLANKTON);
-        double factory = g.has(Milestone.ANIMALS) ? 1.0 : g.has(Milestone.LIFE) ? 0.3 : 0.1;
+        double factory = g.has(Milestone.ANIMALS) ? 1.0
+                : g.has(Milestone.LIFE) ? cfg.carbonateMicrobialFactor() : cfg.carbonateAbioticFactor();
+        double z0 = cfg.carbonateDecayM();
+        double surfaceRate = cfg.carbonateMPerMyr() * factory;
+        double muddy = cfg.carbonateClasticLimitMPerMyr() * dt;
         // each cell only receives its own sediment; the totals are summed afterwards in cell order
         parallel.cells(grid.size(), (from, to) -> {
             for (int idx = from; idx < to; idx++) {
@@ -949,6 +1223,8 @@ public final class SurfaceProcesses {
                 if (depth <= 5.0) {
                     continue;
                 }
+                // river sediment this cell received this step (marine spreading only, so far)
+                double clastic = depositM[idx];
                 double fs = lith.isContinental(idx) ? Isostasy.SEDIMENT_LAND_FACTOR : Isostasy.SEDIMENT_MARINE_FACTOR;
                 double clay = cfg.pelagicMPerMyr() + (ooze && depth < cfg.ccdDepthM() ? cfg.oozeMPerMyr() : 0.0);
                 // settling mud never builds land: it stops a few metres below the surface
@@ -956,17 +1232,30 @@ public final class SurfaceProcesses {
                 pelagicScratch[idx] = km * area;
                 deposit(lith, idx, km * area);
                 depth = sea - elevation[idx];
-                if (depth > 5.0 && depth < cfg.carbonateDepthM() && climate.temperatureC[idx] >= cfg.carbonateMinTempC()) {
-                    double grow = Math.min(cfg.carbonateMPerMyr() * factory * dt / 1000.0, (depth - 5.0) / (fs * 1000.0));
-                    carbonateScratch[idx] = grow * area;
-                    deposit(lith, idx, grow * area);
+                if (depth > 5.0 && depth < cfg.carbonateDepthM() && climate.temperatureC[idx] >= cfg.carbonateMinTempC()
+                        && clastic <= muddy) {
+                    // growth falls off with depth as light does, and the surface rises as it grows:
+                    // dz/dt = -fs r0 e^(-z/z0), so u = e^(z/z0) falls by fs r0 dt / z0; it stops 5 m below sea level
+                    double u = Math.exp(depth / z0) - fs * surfaceRate * dt / z0;
+                    double end = u <= Math.exp(5.0 / z0) ? 5.0 : z0 * Math.log(u);
+                    double grow = (depth - end) / (fs * 1000.0);
+                    if (grow > 0.0) {
+                        carbonateScratch[idx] = grow * area;
+                        deposit(lith, idx, grow * area);
+                    }
                 }
             }
         });
+        int built = 0;
         for (int idx = 0; idx < grid.size(); idx++) {
             pelagicKm3 += pelagicScratch[idx];
             carbonateKm3 += carbonateScratch[idx];
+            // settling stops below sea level: sea cells now above it were built by deltas
+            if (flow.isOcean(idx) && elevation[idx] > sea) {
+                built++;
+            }
         }
+        landFromSeaCells = built;
     }
 
     // ------------------------------------------------------------------ weathering
@@ -1027,12 +1316,22 @@ public final class SurfaceProcesses {
         return discharge;
     }
 
+    /** Sea cells that the last step's marine sediment built above sea level. */
+    public int landFromSeaCells() {
+        return landFromSeaCells;
+    }
+
     /** Mean rock erosion rate over the land in the last step, m/Myr (Earth today: ~50). */
     public double meanLandErosionMPerMyr() {
         return meanLandErosionMPerMyr;
     }
 
     /** Cumulative sediment budget, km3. */
+    /** Marine spreading so far by part (D-41), km3, in the order of {@link #marinePartsKm3}. */
+    public double[] marinePartsKm3() {
+        return marinePartsKm3.clone();
+    }
+
     public Budget budget() {
         return new Budget(erodedKm3, landDepositKm3, marineDepositKm3, deltaPlainKm3, pelagicKm3, carbonateKm3);
     }
