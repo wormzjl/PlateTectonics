@@ -9,7 +9,7 @@
 | **1 Setup** ✅ | Git repo; Gradle multi-project (`geosim-core`, `geosim-cli`, `mod`); NeoForge 21.1.x mod skeleton that loads; Java 21; unit-test harness (the golden-image test helper moved to Phase 2, when there are real maps to pin) | `gradlew build` passes (12 unit tests); the mod loads in NeoForge 21.1.259 (verified headless via `runData`; `runClient` not yet tried); CLI writes a proto-terrain map |
 | **2 Plates** ✅ (core) | Proto-crust; rigid plates on one world raster (whole-cell translation; rotation deferred, D-21); force balance; subduction with remembered polarity, accretion, collision with underthrusting; plateaus, roots and delamination (D-23); rifting, ridges, subduction initiation; crust growth curve; isostasy; sea level by volume; event log v0; CLI PNG maps (elevation, plates, crust age, crust type), timeline GIF, events CSV | Met: a 4.5 Gyr run grows continents from nuclei and arcs, collides, rifts and accretes them (37–40% continental, 34–35% land, ~4 cm/yr); same seed gives the same history (test); 22 unit tests pass; benchmark done (O-6). **Not met:** a clear supercontinent assembly and breakup is not visible yet, so it moves to Phase 8 tuning. The golden-image test is replaced by a bit-exact determinism test |
 | **3 Climate and erosion** ✅ (core) | Box models (Sun, mantle, CO₂, O₂, life milestones), coupled through life (D-27, D-28); climate field; FastScape-style erosion and deposition with a sub-grid relief term (D-30); glaciers v0; weathering depth; biome classification; maps for each | Met: rain shadows on the lee of ranges, interior deserts and polar ice caps; river networks with lakes, endorheic basins, shelves and deltas; young ranges stay sharp while old ones wear to lowlands; the Earth-like preset replays Earth's order and roughly its timing; sediment mass is conserved (test); 34 unit tests pass. **Partly met:** land runs 35–39% (Earth 29%) and standing ocean-floor sediment is ~2–3× an Earth-scaled estimate (see Phase 3 results) |
-| **4 First walkable world** | Vanilla `PlanetChunkGenerator`; `TfcPlanetChunkGenerator` + `ChunkDataGenerator`; MasterWorld save and load; preset + Customize screen with Simulate and map preview; TFC default veins (D-9 step 1) | Create a world in-game with and without TFC; terrain matches the preview; TFC seasons, crops and prospecting work; no crashes from TFC features |
+| **4 First walkable world** 🚧 | Vanilla `PlanetChunkGenerator`; `TfcPlanetChunkGenerator` + `ChunkDataGenerator`; MasterWorld save and load; preset + Customize screen with Simulate and map preview; TFC default veins (D-9 step 1) | Create a world in-game with and without TFC; terrain matches the preview; TFC seasons, crops and prospecting work; no crashes from TFC features |
 | **5 Region refinement** | Tier 1.5a province tiles (local landscape evolution, disk cache) and Tier 1.5b local tiles: river channels and lakes, coastlines, glacial landforms (U-valleys, fjords, moraines), detail synthesis; height expansion option | Rivers continuous across chunks; no seams at tile borders; chunk-generation overhead within budget |
 | **6 Rocks and volcanoes** | Rock columns rendered (folds, tilts, unconformities) to TFC rocks; metamorphism; volcano structures from simulated volcanics; soils | Geologic map at the surface matches the column data; ranges expose old cores and basins young cover |
 | **7 Resources** | Deposit pipeline G1–G8; preservation; `DepositFeature` (D-9 step 2); indicators and gossans; coal ranks; petroleum simulation with tar seeps and oil shale; progression floor; richness multipliers | Validation targets roughly met ([06](06-resources.md#validation-targets-for-tuning-not-hard-rules)); TFC progression (bronze, iron, redstone) reachable on many random seeds |
@@ -69,6 +69,20 @@
   - Land erosion at 31.25 km runs about half its value at 78 km.
   - Glaciers v0, the row-based wind and the missing climate statistics are listed in [04](04-surface-processes.md).
 
-## Phase 4 detail (next up)
+## Phase 4 progress
 
-Vanilla and TFC chunk generators reading the master grid, save and load, and the world-creation screen ([08](08-minecraft-integration.md)). O-6 (master cell size) should be settled before the save format is fixed.
+Parameter tuning is deferred (owner, 2026-10-16: "do not waste time on fine tuning for now"). Phase 3's known gaps stay open.
+
+- **Done** (details in [08 § As built](08-minecraft-integration.md#as-built-phase-4-first-slice)):
+  - MasterWorld save and load (format 1).
+  - `TerrainSampler` (block-resolution terrain and climate).
+  - Vanilla `PlanetChunkGenerator` and biome source.
+  - World types `planet`, `planet_quick` and `planet_tfc`.
+  - Simulate-on-first-start, then load on later starts; spawn on land.
+  - TFC `ChunkGeneratorExtension` + `ChunkDataGenerator` (climate corners, placeholder rocks, TFC soils, salt water, TFC landform biomes). TFC's default veins can run on our TFC raw rocks (D-9 step 1).
+  - GameTests for both modes (pass with and without TFC 4.2.12); 37 unit tests.
+- **Not yet:**
+  - A real game session: a dedicated server needs the EULA accepted in `mod/run`, or the owner runs the client. Checks still open: in-game walkability, TFC seasons, crops and prospecting, the TFC preset in the world-type list next to TFC's (A-11), and TFC's climate model at `temperature_scale` 333,333.
+  - The Customize screen with Simulate, a progress bar and the map preview. Until it exists, the world simulates on its first start and the client waits.
+  - Caves, rivers and lakes in chunks (Phase 5); strata (Phase 6).
+- O-6 is still open. The save format stores the grid size, so 15.6 km and 31.25 km planets both load.

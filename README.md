@@ -5,7 +5,7 @@ A Minecraft 1.21.1 (NeoForge) world-generation mod that builds worlds from a sim
 - **Design (start here):** [docs/design/README.md](docs/design/README.md)
 - **Research:** [docs/reports/](docs/reports/) and [docs/research_notes/](docs/research_notes/)
 
-**Status:** Phase 3 in progress. Climate, a life-coupled history (oxygen and CO₂) and erosion and deposition are implemented; tuning is under way.
+**Status:** Phase 4 in progress. The planet simulation (plates, climate, life-coupled history, erosion and deposition) runs on all cores with identical results. The mod adds the world types "PlateTectonics" and "PlateTectonics (TFC)", which simulate the planet on first start, save it with the world, and build chunks from it.
 
 ## Layout
 

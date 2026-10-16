@@ -77,6 +77,55 @@ TFC assigns `OverworldClimateModel` automatically. It reads our ChunkData averag
 - **Dedicated servers:** settings come from a config file; the simulation runs on first boot. Players open an in-game map screen; the server sends downsampled map tiles.
 - **Coexisting with TFC (A-11):** our preset is an *additional* world type. We never touch TFC's worldgen, presets or `defaultWorldPreset` config; `tfc:overworld` stays the default and players choose "PlateTectonics" in the world-type list. Phase 4 verifies that TFC's `WorldPresetsMixin` leaves our preset selectable.
 
+## As built (Phase 4, first slice)
+
+**World types.** `data/platetectonics/worldgen/world_preset/`, listed in `#minecraft:normal`:
+
+| Preset | Generator | Notes |
+|---|---|---|
+| `planet` | `platetectonics:planet` + biome source `platetectonics:planet` | 31.25 km master grid |
+| `planet_quick` | same, `grid_width` 512 | 78 km, a world in ~15 s |
+| `planet_tfc` | `platetectonics:planet_tfc` + `platetectonics:planet_tfc` | Loaded only with TFC (`neoforge:conditions` mod_loaded; the tag entry is `required: false`). Carries TFC's own `tfc_settings` (rock layers); `temperature_scale` is reset from S at load (333,333 at 30 m/block, D-7) |
+
+**Planet settings** (`planet` object; all optional): `meters_per_block` (30), `grid_width` (1,280), `age_myr` (4,500), `history` (random / earth), `ocean_depth_m` (2,620). The seed is the world seed.
+
+**Load or simulate** (`PlanetLoader`, on `ServerAboutToStartEvent`, before any level exists):
+- If `<world>/data/platetectonics/master.ptw` exists, it is read. A settings mismatch logs a warning and keeps the saved planet.
+- Otherwise the planet is simulated on all cores but one (~2 min at 31.25 km), saved, and then attached to the generator and its biome source.
+- The first spawn is the mild, dry-land cell nearest the origin. Vanilla uses `LevelEvent.CreateSpawnPosition`; TFC uses `findSpawnBiome`.
+
+**Terrain** (`geosim-core` `TerrainSampler`; the stand-in for Tier 1.5 until Phase 5, D-34):
+- Elevation is a Catmull-Rom bicubic of the master cells, clamped to the four surrounding cells.
+- Fractal detail is added, with amplitude 12 m + 0.18 × local relief on land (capped at 900 m), calmer near the coast.
+- Climate is bilinear; temperature follows the detail with 6.5 °C/km.
+- Ice sheets are packed ice of their simulated thickness, with snow on top.
+
+**Columns (vanilla):**
+- Bedrock floor, deepslate below y = 0, stone above.
+- The cover comes from climate class, slope and water depth: grass and dirt, podzol and coarse dirt patches, desert sand over sandstone, beach sand, gravel and clay on the sea floor, bare stone on cliffs, snow above the snow line.
+- Water fills to sea level, with ice on frozen seas.
+- Biomes come from the climate class: oceans split by water temperature, beaches, and peaks above 2,600 m. Vanilla vegetation features place the plants.
+- Not yet: caves and carvers, rivers and lakes, strata. Phase 5 and Phase 6 add these.
+
+**TFC adapter** (`compat/tfc`, compiled against TFC 4.2.12 from Modrinth's Maven; registered only if TFC is loaded):
+- `TfcPlanetChunkGenerator` implements `ChunkGeneratorExtension`:
+  - `initRandomState` registers itself on the `RandomState`, as TFC's generator does, so climate-dependent structure placement finds it.
+  - `ChunkData` goes to PARTIAL in `createStructures` and in fill, then to FULL with the 16 × 16 surface heights.
+  - The aquifer is disabled (no caves yet).
+- `PlanetChunkDataGenerator`:
+  - Corner climate: rainfall = precipitation × 0.2 (0–500); temperature reduced to sea level (TFC applies its own lapse rate); rain variance 0; groundwater = rainfall.
+  - Forest type from the climate class.
+  - `generateRock` is a deterministic placeholder until Phase 6: sedimentary beds to the cell's sediment depth; basalt over gabbro on oceanic crust; continental suites chosen by exhumation, in irregular patches of about 300 blocks.
+- The surface uses TFC soil orders (aridisol, oxisol, podzol, mollisol, alfisol, entisol on slopes), each rock's own sand, sandstone and gravel, salt water and sea ice.
+- `TfcPlanetBiomeSource` picks TFC landform biomes (deep ocean, ocean, shore, lowlands, plains, rolling hills, hills, highlands, plateau, mountains, old mountains, ice sheet) from depth, height, relief and ice. TFC takes climate from ChunkData, not from the biome.
+
+**Tests:**
+- `gradlew :mod:runGameTestServer` (add `-PwithTfc` for TFC 4.2.12 and Patchouli) decodes the presets, simulates a small planet, fills chunks and checks:
+  - heights match `getBaseHeight`, and seas are filled;
+  - with TFC: ChunkData reaches FULL, rock at depth matches `generateRock`, the sea is salt water, and biomes are TFC biomes.
+- The game-test server needs no EULA. A dedicated-server or client run is still to do.
+- `geosim-cli --from-master FILE --block-view X,Z,PIXELS,STEP` renders the terrain as chunk generation builds it, without starting Minecraft.
+
 ## Gaps
 
 What is missing, blocked or lossy with TFC (details and sources in the report):

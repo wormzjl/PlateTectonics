@@ -8,6 +8,7 @@ import com.platetectonics.geosim.grid.CylinderGrid;
 import com.platetectonics.geosim.history.GlobalState;
 import com.platetectonics.geosim.history.Milestone;
 import com.platetectonics.geosim.history.WorldHistory;
+import com.platetectonics.geosim.io.BlockPreview;
 import com.platetectonics.geosim.io.GifWriter;
 import com.platetectonics.geosim.io.MapImage;
 import com.platetectonics.geosim.io.SurfaceMaps;
@@ -19,7 +20,10 @@ import com.platetectonics.geosim.surface.SurfaceProcesses;
 import com.platetectonics.geosim.tectonics.PlateSimulation;
 import com.platetectonics.geosim.tectonics.TectonicsConfig;
 import com.platetectonics.geosim.terrain.SeaLevel;
+import com.platetectonics.geosim.world.MasterWorld;
+import com.platetectonics.geosim.world.MasterWorldIO;
 import com.platetectonics.geosim.world.PlanetSpec;
+import com.platetectonics.geosim.world.TerrainSampler;
 
 import java.awt.image.BufferedImage;
 import java.io.PrintWriter;
@@ -50,6 +54,9 @@ public final class Main {
         double reportEvery = 250;
         boolean platesOnly = false;
         int threads = Runtime.getRuntime().availableProcessors();
+        boolean saveMaster = false;
+        java.util.List<String> blockViews = new java.util.ArrayList<>();
+        Path fromMaster = null;
         WorldHistory.Preset preset = WorldHistory.Preset.RANDOM;
         java.util.List<String> overrides = new java.util.ArrayList<>();
         Path out = Path.of("maps");
@@ -66,6 +73,9 @@ public final class Main {
                 case "--report-every" -> reportEvery = Double.parseDouble(args[++k]);
                 case "--plates-only" -> platesOnly = true;
                 case "--threads" -> threads = Integer.parseInt(args[++k]);
+                case "--master" -> saveMaster = true;
+                case "--block-view" -> blockViews.add(args[++k]);
+                case "--from-master" -> fromMaster = Path.of(args[++k]);
                 case "--history" -> preset = switch (args[++k]) {
                     case "random" -> WorldHistory.Preset.RANDOM;
                     case "earth" -> WorldHistory.Preset.EARTH_LIKE;
@@ -76,8 +86,10 @@ public final class Main {
                 case "--help", "-h" -> {
                     System.out.println("geosim-cli --seed N [--width W | --cell-km K] --age MYR [--history random|earth] "
                             + "[--plates-only] [--set CONSTANT=VALUE ...] --frame-every MYR --gif-width PX --report-every MYR --scale S "
-                            + "--ocean-depth M --threads N --out DIR");
+                            + "--ocean-depth M --threads N [--master] [--block-view X,Z[,PIXELS[,BLOCKS_PER_PIXEL]] ...] --out DIR");
                     System.out.println("  --frame-every 0 skips the timeline GIF");
+                    System.out.println("  --master writes master.ptw, the file a Minecraft world loads");
+                    System.out.println("  --block-view renders the terrain as chunk generation builds it, centred on block X,Z");
                     System.out.println("  --threads defaults to all cores; every count gives the same planet");
                     return;
                 }
@@ -86,6 +98,13 @@ public final class Main {
         }
 
         PlanetSpec planet = PlanetSpec.earth(scale);
+        if (fromMaster != null) {
+            // block views of a saved planet, no simulation
+            Files.createDirectories(out);
+            renderBlockViews(new TerrainSampler(MasterWorldIO.read(fromMaster), planet), blockViews, out);
+            System.out.println("-> " + out.toAbsolutePath());
+            return;
+        }
         CylinderGrid grid = CylinderGrid.forPlanet(planet.circumferenceKm(), width);
         Path dir = out.resolve("seed_" + seed);
         Files.createDirectories(dir);
@@ -138,7 +157,7 @@ public final class Main {
                 if (now >= age - 1e-6) {
                     break;
                 }
-                sim.step(Math.min(eraStep(now, age), age - now));
+                sim.step(Math.min(PlanetSimulation.eraStepMyr(now, age), age - now));
                 steps++;
                 logHistory(sim, history);
             }
@@ -168,6 +187,13 @@ public final class Main {
             MapImage.write(SurfaceMaps.erosion(s, grid, e), dir.resolve("erosion.png"));
             MapImage.write(SurfaceMaps.sediment(plates.lithosphere(), e), dir.resolve("sediment.png"));
             MapImage.write(SurfaceMaps.regolith(plates.lithosphere(), e), dir.resolve("regolith.png"));
+            if (saveMaster || !blockViews.isEmpty()) {
+                MasterWorld master = MasterWorld.capture(sim, new MasterWorld.Settings(seed, width, age, preset, oceanDepth));
+                if (saveMaster) {
+                    MasterWorldIO.write(master, dir.resolve("master.ptw"));
+                }
+                renderBlockViews(new TerrainSampler(master, planet), blockViews, dir);
+            }
         }
         writeEvents(plates, dir.resolve("events.csv"));
         long tEnd = System.nanoTime();
@@ -204,6 +230,18 @@ public final class Main {
         System.out.println("-> " + dir.toAbsolutePath());
     }
 
+    private static void renderBlockViews(TerrainSampler sampler, java.util.List<String> views, Path dir) throws java.io.IOException {
+        for (String view : views) {
+            String[] v = view.split(",");
+            int bx = Integer.parseInt(v[0].trim());
+            int bz = Integer.parseInt(v[1].trim());
+            int px = v.length > 2 ? Integer.parseInt(v[2].trim()) : 1024;
+            int step = v.length > 3 ? Integer.parseInt(v[3].trim()) : 4;
+            MapImage.write(BlockPreview.render(sampler, bx, bz, px, step),
+                    dir.resolve("blocks_" + bx + "_" + bz + "_x" + step + ".png"));
+        }
+    }
+
     private static boolean hasComponent(Record r, String name) {
         for (var c : r.getClass().getRecordComponents()) {
             if (c.getName().equals(name)) {
@@ -230,17 +268,6 @@ public final class Main {
     }
 
     /** Era time step (docs/design/02-simulation-pipeline.md): coarse in deep time, fine near the present. */
-    static double eraStep(double now, double age) {
-        double remaining = age - now;
-        if (remaining > 1000) {
-            return 10;
-        }
-        if (remaining > 300) {
-            return 5;
-        }
-        return 2;
-    }
-
     private static BufferedImage frame(PlanetSimulation sim) {
         if (sim.platesOnly() || sim.timeMyr() <= 0.0) {
             FloatField e = new FloatField(sim.grid());

@@ -1,0 +1,202 @@
+{
+  "neoforge:conditions": [
+    {
+      "type": "neoforge:mod_loaded",
+      "modid": "tfc"
+    }
+  ],
+  "dimensions": {
+    "minecraft:overworld": {
+      "type": "minecraft:overworld",
+      "generator": {
+        "type": "platetectonics:planet_tfc",
+        "biome_source": {
+          "type": "platetectonics:planet_tfc"
+        },
+        "planet": {},
+        "tfc_settings": {
+          "continentalness": 0.5,
+          "finite_continents": false,
+          "flat_bedrock": false,
+          "grass_density": 0.5,
+          "rainfall_scale": 20000,
+          "rock_layer_settings": {
+            "bottom": [
+              "gneiss",
+              "schist",
+              "diorite",
+              "granite",
+              "gabbro"
+            ],
+            "land": [
+              "sedimentary",
+              "sedimentary",
+              "sedimentary",
+              "igneous_extrusive"
+            ],
+            "layers": [
+              {
+                "id": "felsic",
+                "layers": {
+                  "granite": "bottom"
+                }
+              },
+              {
+                "id": "intermediate",
+                "layers": {
+                  "diorite": "bottom"
+                }
+              },
+              {
+                "id": "mafic",
+                "layers": {
+                  "gabbro": "bottom"
+                }
+              },
+              {
+                "id": "igneous_extrusive",
+                "layers": {
+                  "andesite": "intermediate",
+                  "basalt": "mafic",
+                  "dacite": "intermediate",
+                  "rhyolite": "felsic"
+                }
+              },
+              {
+                "id": "igneous_extrusive_x2",
+                "layers": {
+                  "andesite": "igneous_extrusive",
+                  "basalt": "igneous_extrusive",
+                  "dacite": "igneous_extrusive",
+                  "rhyolite": "igneous_extrusive"
+                }
+              },
+              {
+                "id": "igneous_intrusive",
+                "layers": {
+                  "diorite": "intermediate",
+                  "gabbro": "mafic",
+                  "granite": "felsic"
+                }
+              },
+              {
+                "id": "high_grade",
+                "layers": {
+                  "gneiss": "bottom",
+                  "schist": "bottom"
+                }
+              },
+              {
+                "id": "low_grade",
+                "layers": {
+                  "phyllite": "high_grade",
+                  "slate": "high_grade"
+                }
+              },
+              {
+                "id": "marble",
+                "layers": {
+                  "marble": "bottom"
+                }
+              },
+              {
+                "id": "quartzite",
+                "layers": {
+                  "quartzite": "bottom"
+                }
+              },
+              {
+                "id": "sedimentary",
+                "layers": {
+                  "chalk": "marble",
+                  "chert": "quartzite",
+                  "claystone": "low_grade",
+                  "conglomerate": "low_grade",
+                  "dolomite": "marble",
+                  "limestone": "marble",
+                  "shale": "low_grade"
+                }
+              },
+              {
+                "id": "uplift",
+                "layers": {
+                  "diorite": "low_grade",
+                  "gabbro": "low_grade",
+                  "gneiss": "high_grade",
+                  "granite": "low_grade",
+                  "marble": "bottom",
+                  "phyllite": "high_grade",
+                  "quartzite": "bottom",
+                  "schist": "high_grade",
+                  "slate": "high_grade"
+                }
+              }
+            ],
+            "ocean_floor": [
+              "igneous_extrusive"
+            ],
+            "rocks": {
+              "andesite": "tfc:andesite",
+              "basalt": "tfc:basalt",
+              "chalk": "tfc:chalk",
+              "chert": "tfc:chert",
+              "claystone": "tfc:claystone",
+              "conglomerate": "tfc:conglomerate",
+              "dacite": "tfc:dacite",
+              "diorite": "tfc:diorite",
+              "dolomite": "tfc:dolomite",
+              "gabbro": "tfc:gabbro",
+              "gneiss": "tfc:gneiss",
+              "granite": "tfc:granite",
+              "limestone": "tfc:limestone",
+              "marble": "tfc:marble",
+              "phyllite": "tfc:phyllite",
+              "quartzite": "tfc:quartzite",
+              "rhyolite": "tfc:rhyolite",
+              "schist": "tfc:schist",
+              "shale": "tfc:shale",
+              "slate": "tfc:slate",
+              "tuff": "tfc:tuff"
+            },
+            "uplift": [
+              "uplift",
+              "uplift",
+              "uplift",
+              "sedimentary"
+            ],
+            "volcanic": [
+              "igneous_extrusive",
+              "igneous_extrusive_x2",
+              "igneous_intrusive"
+            ]
+          },
+          "spawn_center_x": 0,
+          "spawn_center_z": 0,
+          "spawn_distance": 4000,
+          "temperature_scale": 333333
+        }
+      }
+    },
+    "minecraft:the_nether": {
+      "type": "minecraft:the_nether",
+      "generator": {
+        "type": "minecraft:noise",
+        "biome_source": {
+          "type": "minecraft:multi_noise",
+          "preset": "minecraft:nether"
+        },
+        "settings": "minecraft:nether"
+      }
+    },
+    "minecraft:the_end": {
+      "type": "minecraft:the_end",
+      "generator": {
+        "type": "minecraft:noise",
+        "biome_source": {
+          "type": "minecraft:the_end"
+        },
+        "settings": "minecraft:end"
+      }
+    }
+  }
+}

@@ -95,6 +95,21 @@ public final class PlanetSimulation {
         climateReady = true;
     }
 
+    /**
+     * Step length for a run to {@code ageMyr}: 10 Myr until 1 Gyr before the end, 5 Myr until 300 Myr
+     * before, then 2 Myr, so the recent past that shapes today's landscape is resolved best.
+     */
+    public static double eraStepMyr(double nowMyr, double ageMyr) {
+        double remaining = ageMyr - nowMyr;
+        if (remaining > 1000) {
+            return 10;
+        }
+        if (remaining > 300) {
+            return 5;
+        }
+        return 2;
+    }
+
     /** Wall time spent so far in plates, climate and surface processes, s. */
     public double[] phaseSeconds() {
         return new double[]{platesNanos / 1e9, climateNanos / 1e9, surfaceNanos / 1e9};

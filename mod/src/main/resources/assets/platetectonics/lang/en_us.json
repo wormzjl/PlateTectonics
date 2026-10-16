@@ -1,2 +1,5 @@
 {
+  "generator.platetectonics.planet": "PlateTectonics",
+  "generator.platetectonics.planet_quick": "PlateTectonics (quick, 78 km)",
+  "generator.platetectonics.planet_tfc": "PlateTectonics (TFC)"
 }

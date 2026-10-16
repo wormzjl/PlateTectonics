@@ -97,3 +97,8 @@ If the 15.6 km grid cannot meet the run budget, the fallback is a 31 km master g
 - Location: `<world>/data/platetectonics/master.ptw`, plus `deposits.ptd`, `preview/`, and the province-tile cache `provinces/` (filled lazily as players explore; safe to delete, it regenerates deterministically).
 - Layout: header (versions, seed, settings, grid size) + tiles of 64×64 cells, each compressed independently for random access.
 - Contents: present-day fields, rock columns, river network, glacial fields, deposit index, and preview snapshots (downsampled maps every 10–50 Myr for the timeline scrubber).
+- **As built (format 1, Phase 4):** `world/MasterWorld` + `world/MasterWorldIO`. It is one gzip stream, not yet tiled. A header (magic `PTMW`, format, simulation version, seed, grid width, age, history preset, ocean depth, grid) is followed by 17 named per-cell fields:
+  - surface: elevation, temperature, seasonal range, precipitation, aridity, ice, discharge, erosion rate, lakes, climate class;
+  - crust: crust type and thickness, sediment, regolith, exhumation, formation time, plate.
+
+  Fields are matched by name on load. The file is written to a temporary file and then moved into place. Size is ~15 MB at 31.25 km. Rock columns, rivers, deposits and preview snapshots are added with their phases.

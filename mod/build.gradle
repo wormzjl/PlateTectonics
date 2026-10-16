@@ -24,6 +24,18 @@ sourceSets.main.resources {
 }
 
 repositories {
+    // TFC is not on a public Maven of its own; Modrinth mirrors every release
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = 'Modrinth'
+                url = 'https://api.modrinth.com/maven'
+            }
+        }
+        filter {
+            includeGroup 'maven.modrinth'
+        }
+    }
 }
 
 neoForge {
@@ -42,6 +54,10 @@ neoForge {
         server {
             server()
             programArgument '--nogui'
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+        gameTestServer {
+            type = "gameTestServer"
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
         }
         data {
@@ -70,6 +86,13 @@ configurations {
 dependencies {
     // For IDE resolution only; the sources themselves are compiled below.
     compileOnly project(':geosim-core')
+    // TFC adapter (compat/tfc) compiles against TFC; at runtime TFC is optional (A-11)
+    compileOnly "maven.modrinth:terrafirmacraft:${tfc_version}"
+    // dev runs with TFC: gradlew -PwithTfc runClient / runGameTestServer
+    if (project.hasProperty('withTfc')) {
+        localRuntime "maven.modrinth:terrafirmacraft:${tfc_version}"
+        localRuntime "maven.modrinth:patchouli:${patchouli_version}"
+    }
 }
 
 tasks.named('compileJava', JavaCompile) {

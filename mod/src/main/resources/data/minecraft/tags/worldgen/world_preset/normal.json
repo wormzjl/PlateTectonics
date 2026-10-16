@@ -1,0 +1,8 @@
+{
+  "replace": false,
+  "values": [
+    "platetectonics:planet",
+    "platetectonics:planet_quick",
+    {"id": "platetectonics:planet_tfc", "required": false}
+  ]
+}

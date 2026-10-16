@@ -21,6 +21,8 @@ public final class Streams {
     public static final long MILESTONES = 41;
     /** Snowball onset thresholds and durations. */
     public static final long SNOWBALL = 42;
+    /** Block-scale terrain detail in chunk generation (not part of the simulation). */
+    public static final long TERRAIN_DETAIL = 100;
 
     private Streams() {
     }
