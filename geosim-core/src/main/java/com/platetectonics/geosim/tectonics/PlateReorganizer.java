@@ -50,17 +50,55 @@ final class PlateReorganizer {
         }
     }
 
-    /** Relabels every cell of {@code from} as {@code into}; velocities combine by area. */
+    /**
+     * Relabels every cell of {@code from} as {@code into}, at the place in {@code into}'s raster that lands on
+     * it (D-42); velocities and spins combine by area.
+     */
     static void absorb(PlateSimulation sim, Plate from, Plate into) {
-        int[] owner = sim.lith.owner;
-        for (int idx = 0; idx < owner.length; idx++) {
-            if (owner[idx] == from.id) {
-                owner[idx] = into.id;
+        Lithosphere L = sim.lith;
+        int[] owner = L.owner;
+        int w = sim.grid.width();
+        // from's own frame keeps its cells in one piece; the two origins are a whole number of columns apart,
+        // taken across the date line the short way between the plates' centres
+        // whole-number sums: exact in any order, so the worker threads add them up
+        long[] sums = new long[6]; // from u, v, cells; into u, v, cells
+        sim.parallel.cells(owner.length, (lo, hi) -> {
+            long[] part = new long[6];
+            for (int idx = lo; idx < hi; idx++) {
+                int k = owner[idx] == from.id ? 0 : owner[idx] == into.id ? 3 : -1;
+                if (k >= 0) {
+                    part[k] += L.u[idx];
+                    part[k + 1] += L.v[idx];
+                    part[k + 2]++;
+                }
             }
-        }
+            synchronized (sums) {
+                for (int k = 0; k < 6; k++) {
+                    sums[k] += part[k];
+                }
+            }
+        });
+        double fromCentre = sums[2] == 0 ? 0.0 : from.frame.rotX((double) sums[0] / sums[2], (double) sums[1] / sums[2]);
+        double intoCentre = sums[5] == 0 ? 0.0 : into.frame.rotX((double) sums[3] / sums[5], (double) sums[4] / sums[5]);
+        int shift = from.originI - into.originI;
+        int di = shift - w * (int) Math.floor((shift + fromCentre - intoCentre) / w + 0.5);
+        int dj = from.originJ - into.originJ;
+        sim.parallel.cells(owner.length, (lo, hi) -> {
+            for (int idx = lo; idx < hi; idx++) {
+                if (owner[idx] == from.id) {
+                    owner[idx] = into.id;
+                    long at = from.frame.forward(L.u[idx], L.v[idx]);
+                    long uv = into.frame.inverse(di + PlateFrame.x(at), dj + PlateFrame.y(at));
+                    L.u[idx] = PlateFrame.x(uv);
+                    L.v[idx] = PlateFrame.y(uv);
+                }
+            }
+        });
         double total = Math.max(1.0, from.area + into.area);
         into.vx = (into.vx * into.area + from.vx * from.area) / total;
         into.vy = (into.vy * into.area + from.vy * from.area) / total;
+        into.omega = (into.omega * into.area + from.omega * from.area) / total;
+        into.spinDrift = (into.spinDrift * into.area + from.spinDrift * from.area) / total;
         into.area += from.area;
         into.continentalArea += from.continentalArea;
         from.area = 0;
@@ -217,6 +255,7 @@ final class PlateReorganizer {
         created.lastRiftTime = sim.time;
         plate.area = countA;
         created.area = countB;
+        inheritSpin(sim, plate, created);
         return created;
     }
 
@@ -319,7 +358,17 @@ final class PlateReorganizer {
         }
         created.area = oceanCells;
         p.area = contCells;
+        inheritSpin(sim, p, created);
         return created;
+    }
+
+    /** A plate split off {@code parent} keeps its spin and turn history, in a fresh frame of its own (D-42). */
+    private static void inheritSpin(PlateSimulation sim, Plate parent, Plate created) {
+        created.omega = parent.omega;
+        created.spinDrift = parent.spinDrift;
+        created.turned = parent.turned;
+        created.turnedMark = parent.turnedMark;
+        sim.reframe(created);
     }
 
     // ------------------------------------------------------------------ housekeeping

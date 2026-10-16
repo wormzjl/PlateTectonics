@@ -62,6 +62,7 @@ public record TectonicsConfig(
         double velocityRelaxMyr,
         double driftKmPerMyr,
         double driftTimescaleMyr,
+        double spinDragFactor,
         // plumes, rifts, subduction initiation, merges
         double plumeRatePerMyr,
         double plumeRadiusKm,
@@ -138,6 +139,7 @@ public record TectonicsConfig(
                 10.0,    // velocityRelaxMyr
                 12.0,    // driftKmPerMyr: random mantle drag on each plate
                 100.0,   // driftTimescaleMyr
+                1.0,     // spinDragFactor: multiplies spin drag, divides spin drift (D-42); Infinity turns spin off
 
                 1.0 / 30.0, // plumeRatePerMyr
                 500.0,   // plumeRadiusKm

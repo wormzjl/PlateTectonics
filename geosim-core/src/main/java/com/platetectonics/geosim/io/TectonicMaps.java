@@ -3,6 +3,7 @@ package com.platetectonics.geosim.io;
 import com.platetectonics.geosim.field.FloatField;
 import com.platetectonics.geosim.grid.CylinderGrid;
 import com.platetectonics.geosim.tectonics.Lithosphere;
+import com.platetectonics.geosim.tectonics.Plate;
 import com.platetectonics.geosim.tectonics.PlateSimulation;
 
 import java.awt.Color;
@@ -32,8 +33,13 @@ public final class TectonicMaps {
         return img;
     }
 
-    /** Each plate in its own colour; continents bright, ocean floor dark; boundaries black. */
+    /** Each plate in its own colour; continents bright, ocean floor dark; boundaries black; spin arrows. */
     public static BufferedImage plates(PlateSimulation sim) {
+        return plates(sim, true);
+    }
+
+    /** As {@link #plates(PlateSimulation)}, with or without the spin arrows. */
+    public static BufferedImage plates(PlateSimulation sim, boolean spins) {
         Lithosphere L = sim.lithosphere();
         CylinderGrid g = sim.grid();
         BufferedImage img = new BufferedImage(g.width(), g.height(), BufferedImage.TYPE_INT_RGB);
@@ -48,7 +54,61 @@ public final class TectonicMaps {
             }
             img.setRGB(g.iOf(idx), g.jOf(idx), rgb);
         }
+        if (spins) {
+            drawSpins(sim, img, Math.max(5.0, g.width() / 40.0));
+        }
         return img;
+    }
+
+    /**
+     * A three-quarter circle with an arrowhead at the centre of every spinning plate (D-42), turning the way the
+     * plate turns; its radius grows with the spin up to {@code fullRadius} pixels at 1 degree per Myr. The image
+     * may be the map at any size (a shrunk map gets its arrows after shrinking, so they stay legible).
+     */
+    public static void drawSpins(PlateSimulation sim, BufferedImage img, double fullRadius) {
+        int gw = sim.grid().width();
+        double scale = (double) img.getWidth() / gw;
+        Graphics2D g2 = null;
+        for (Plate p : sim.plates()) {
+            if (!p.alive() || p.spinDegPerMyr() == 0.0) {
+                continue;
+            }
+            if (g2 == null) {
+                g2 = img.createGraphics();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            }
+            double r = fullRadius * Math.min(1.0, 0.35 + 0.65 * Math.abs(p.spinDegPerMyr()));
+            double cx = Math.floorMod((int) Math.round(p.centreI()), gw) * scale;
+            double cy = p.centreJ() * scale;
+            boolean clockwise = p.spinDegPerMyr() > 0.0;
+            // screen angles: 0 = east, increasing counterclockwise on screen (y down)
+            int start = 45;
+            int sweep = clockwise ? -270 : 270;
+            for (int pass = 0; pass < 2; pass++) {
+                g2.setColor(pass == 0 ? Color.BLACK : Color.WHITE);
+                g2.setStroke(new java.awt.BasicStroke(pass == 0 ? 3.2f : 1.4f));
+                g2.drawArc((int) Math.round(cx - r), (int) Math.round(cy - r), (int) Math.round(2 * r),
+                        (int) Math.round(2 * r), start, sweep);
+                double end = Math.toRadians(start + sweep);
+                double ex = cx + r * Math.cos(end);
+                double ey = cy - r * Math.sin(end);
+                // tangent in the direction of travel at the end of the arc
+                double tx = clockwise ? Math.sin(end) : -Math.sin(end);
+                double ty = clockwise ? Math.cos(end) : -Math.cos(end);
+                double hl = Math.max(3.0, r * 0.6);
+                int[] xs = {(int) Math.round(ex + tx * hl * 0.6), (int) Math.round(ex - tx * hl * 0.4 - ty * hl * 0.5),
+                        (int) Math.round(ex - tx * hl * 0.4 + ty * hl * 0.5)};
+                int[] ys = {(int) Math.round(ey + ty * hl * 0.6), (int) Math.round(ey - ty * hl * 0.4 + tx * hl * 0.5),
+                        (int) Math.round(ey - ty * hl * 0.4 - tx * hl * 0.5)};
+                if (pass == 0) {
+                    g2.drawPolygon(xs, ys, 3);
+                }
+                g2.fillPolygon(xs, ys, 3);
+            }
+        }
+        if (g2 != null) {
+            g2.dispose();
+        }
     }
 
     /**

@@ -8,6 +8,8 @@ public final class Streams {
     public static final long PLATE_SEEDS = 10;
     public static final long PLATE_WARP = 11;
     public static final long DRIFT = 20;
+    /** Spin drift of each plate (D-42); uses this stream and the next. */
+    public static final long SPIN_DRIFT = 22;
     public static final long PLUME = 30;
     public static final long RIFT = 31;
     public static final long MARGIN_SPLIT = 32;

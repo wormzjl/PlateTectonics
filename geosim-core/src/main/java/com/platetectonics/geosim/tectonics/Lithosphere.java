@@ -45,6 +45,9 @@ public final class Lithosphere {
     float[] exhumed;
     /** Last time ice covered the cell, Myr; -1 = never. */
     float[] lastGlaciated;
+    /** Place of the cell in its plate's own raster, cells (D-42; see {@link Plate}). */
+    int[] u;
+    int[] v;
 
     int[] owner2;
     float[] thick2;
@@ -58,6 +61,8 @@ public final class Lithosphere {
     float[] regolith2;
     float[] exhumed2;
     float[] lastGlaciated2;
+    int[] u2;
+    int[] v2;
 
     Lithosphere(CylinderGrid grid) {
         this.grid = grid;
@@ -86,6 +91,10 @@ public final class Lithosphere {
         exhumed2 = new float[n];
         lastGlaciated = new float[n];
         lastGlaciated2 = new float[n];
+        u = new int[n];
+        u2 = new int[n];
+        v = new int[n];
+        v2 = new int[n];
         java.util.Arrays.fill(lastGlaciated, -1f);
         java.util.Arrays.fill(lastGlaciated2, -1f);
     }
@@ -103,6 +112,8 @@ public final class Lithosphere {
         f = regolith; regolith = regolith2; regolith2 = f;
         f = exhumed; exhumed = exhumed2; exhumed2 = f;
         f = lastGlaciated; lastGlaciated = lastGlaciated2; lastGlaciated2 = f;
+        oi = u; u = u2; u2 = oi;
+        oi = v; v = v2; v2 = oi;
     }
 
     /** Copies front cell {@code from} into back cell {@code to}. */
@@ -119,6 +130,26 @@ public final class Lithosphere {
         regolith2[to] = regolith[from];
         exhumed2[to] = exhumed[from];
         lastGlaciated2[to] = lastGlaciated[from];
+        u2[to] = u[from];
+        v2[to] = v[from];
+    }
+
+    /** Copies back cell {@code from} into back cell {@code to}. */
+    void copyWithinBack(int from, int to) {
+        owner2[to] = owner2[from];
+        thick2[to] = thick2[from];
+        oceanAge2[to] = oceanAge2[from];
+        formedAt2[to] = formedAt2[from];
+        type2[to] = type2[from];
+        marks2[to] = marks2[from];
+        keel2[to] = keel2[from];
+        eclogite2[to] = eclogite2[from];
+        sediment2[to] = sediment2[from];
+        regolith2[to] = regolith2[from];
+        exhumed2[to] = exhumed2[from];
+        lastGlaciated2[to] = lastGlaciated2[from];
+        u2[to] = u2[from];
+        v2[to] = v2[from];
     }
 
     public CylinderGrid grid() {

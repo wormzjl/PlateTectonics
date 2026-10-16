@@ -67,6 +67,11 @@ public final class PlateSimulation {
     long subductedCells;
     long collisionCells;
     long newOceanCells;
+    /** Cells inside turned plates filled because of the rotation's rounding (D-42), since formation. */
+    long roundingHoleCells;
+    /** Since formation: motion substeps, and cells of new ocean floor. */
+    long totalSubsteps;
+    long totalNewOceanCells;
     long poleLostCells;
     int lastSubsteps;
     boolean flowBudgetExhausted;
@@ -86,6 +91,7 @@ public final class PlateSimulation {
     double budgetSubducted;
     double budgetForearc;
     double budgetClosure;
+    double budgetRounding;
 
     public PlateSimulation(CylinderGrid grid, long seed, TectonicsConfig cfg) {
         this.grid = grid;
@@ -184,6 +190,9 @@ public final class PlateSimulation {
                 lith.owner[j * w + i] = best;
             }
         }
+        boolean[] all = new boolean[count];
+        Arrays.fill(all, true);
+        reframe(all);
         refreshStats();
         updateSeaLevel();
     }
@@ -201,14 +210,22 @@ public final class PlateSimulation {
         polarity.forgetStale(stepIndex);
 
         refreshStats();
+        if (spinOn()) {
+            refreshSpin();
+        }
         updateSeaLevel();
         arcMultiplier = arcMultiplier();
         PlateDynamics.updateVelocities(this, dtMyr);
 
+        // the fastest cell of any plate (drift plus spin at its farthest reach) moves at most a few cells
         double maxCells = 0.0;
         for (Plate p : plates) {
             if (p.alive) {
-                maxCells = Math.max(maxCells, Math.max(Math.abs(p.vx), Math.abs(p.vy)) * dtMyr / grid.cellKm());
+                double cells = Math.max(Math.abs(p.vx), Math.abs(p.vy)) * dtMyr / grid.cellKm();
+                if (p.omega != 0.0) {
+                    cells += Math.abs(p.omega) * p.radius * dtMyr;
+                }
+                maxCells = Math.max(maxCells, cells);
             }
         }
         if (underthrustCrust.length < plates.size()) {
@@ -218,21 +235,31 @@ public final class PlateSimulation {
         }
         int substeps = Math.max(1, (int) Math.ceil(maxCells / cfg.maxCellsPerSubstep()));
         double subDt = dtMyr / substeps;
+        int w = grid.width();
         for (int s = 0; s < substeps; s++) {
+            // the pose is absolute: cells land where it puts their place in the plate's raster, never relative
+            // to where they were, so small turns add up instead of rounding away
             for (Plate p : plates) {
                 if (!p.alive) {
                     continue;
                 }
                 p.accX += p.vx * subDt / grid.cellKm();
                 p.accY += p.vy * subDt / grid.cellKm();
-                p.shiftX = (int) Math.floor(p.accX);
-                p.shiftY = (int) Math.floor(p.accY);
-                p.accX -= p.shiftX;
-                p.accY -= p.shiftY;
+                if (p.omega != 0.0) {
+                    turn(p, p.omega * subDt);
+                }
+                int shiftX = (int) Math.floor(p.accX);
+                int shiftY = (int) Math.floor(p.accY);
+                p.accX -= shiftX;
+                p.accY -= shiftY;
+                p.originI = Math.floorMod(p.originI + shiftX, w);
+                p.originJ += shiftY;
             }
             PlateMotion.substep(this, subDt, time + (s + 1) * subDt);
         }
         lastSubsteps = substeps;
+        totalSubsteps += substeps;
+        totalNewOceanCells += newOceanCells;
 
         PlateMotion.distributeUnderthrust(this);
         CrustalFlow.relax(this);
@@ -462,6 +489,344 @@ public final class PlateSimulation {
         }
     }
 
+    /** Whether plates spin (D-42); an infinite {@code spinDragFactor} turns spin off. */
+    boolean spinOn() {
+        return Double.isFinite(cfg.spinDragFactor());
+    }
+
+    /**
+     * Turns plate {@code p} by {@code dTheta} about its centre of area, which stays put (drift moves it
+     * separately): the frame origin swings round the centre by the exact rotation, so it may lie far away.
+     */
+    private static void turn(Plate p, double dTheta) {
+        PlateFrame f = p.frame;
+        double bx = f.rotX(p.pivotU, p.pivotV);
+        double by = f.rotY(p.pivotU, p.pivotV);
+        f.set(f.theta() + dTheta);
+        p.accX += bx - f.rotX(p.pivotU, p.pivotV);
+        p.accY += by - f.rotY(p.pivotU, p.pivotV);
+        p.turned += dTheta;
+    }
+
+    /** Remembers every plate's total turn, for {@link Plate#turnSinceMarkDeg()}. */
+    public void markTurns() {
+        for (Plate p : plates) {
+            p.turnedMark = p.turned;
+        }
+    }
+
+    /**
+     * Centre of area, moments and reach of every plate in its own frame, and whether it can turn (D-42). A
+     * plate whose reach comes near half the world's width would wrap onto itself if it turned (a band round
+     * the cylinder cannot turn about a vertical axis): it gets a fresh frame at angle 0 and does not spin.
+     * It may turn again once its reach falls below 90% of the limit. A wide plate's frame is refreshed every
+     * eighth step, in case its places went round the cylinder while it was a band.
+     */
+    void refreshSpin() {
+        spinStats();
+        int count = plates.size();
+        boolean[] wide = new boolean[count];
+        boolean any = false;
+        double limit = grid.width() - 6.0;
+        for (Plate p : plates) {
+            if (!p.alive) {
+                continue;
+            }
+            double reach = 2.0 * p.radius;
+            boolean was = p.canSpin;
+            p.canSpin = was ? reach < limit : reach < 0.9 * limit;
+            if (!p.canSpin) {
+                p.omega = 0.0;
+                p.spinDrift = 0.0;
+                if (was || !p.frame.identity() || (stepIndex & 7) == 0) {
+                    wide[p.id] = true;
+                    any = true;
+                }
+            }
+        }
+        if (any) {
+            reframe(wide);
+            spinStats();
+        }
+    }
+
+    /** Single cells filled inside turned plates because of the rotation's rounding (D-42), since formation. */
+    public long roundingHoleCells() {
+        return roundingHoleCells;
+    }
+
+    /** Cells of new ocean floor made at ridges since formation. */
+    public long totalNewOceanCells() {
+        return totalNewOceanCells;
+    }
+
+    /** Motion substeps since formation. */
+    public long totalSubsteps() {
+        return totalSubsteps;
+    }
+
+    /** Area-weighted RMS speed of the cells from spin alone, cm/yr (D-42); compare {@link StepStats#rmsSpeedCmPerYr}. */
+    public double spinRmsCmPerYr() {
+        double area = 0.0;
+        double sq = 0.0;
+        double k = grid.cellKm();
+        for (Plate p : plates) {
+            if (p.alive) {
+                area += p.area;
+                sq += p.omega * p.omega * p.inertia * k * k;
+            }
+        }
+        return area > 0.0 ? Math.sqrt(sq / area) / 10.0 : 0.0;
+    }
+
+    /**
+     * Shares of plate-boundary length that converge, diverge or slide past (transform), from each side's local
+     * velocity, spin included: an edge converges or diverges when its closing speed beats its slip speed.
+     */
+    public double[] boundaryShares() {
+        spinStats();
+        return PlateDynamics.boundaryShares(this);
+    }
+
+    /** Whole-number sums over each plate's places; exact in any order, so the worker threads may add them up. */
+    private static final class PlaceSums {
+        final long[] su;
+        final long[] sv;
+        final long[] sq;
+        final long[] cu;
+        final long[] cv;
+        final long[] cq;
+        final int[] cn;
+        final int[] minU;
+        final int[] maxU;
+        final int[] minV;
+        final int[] maxV;
+
+        PlaceSums(int count) {
+            su = new long[count];
+            sv = new long[count];
+            sq = new long[count];
+            cu = new long[count];
+            cv = new long[count];
+            cq = new long[count];
+            cn = new int[count];
+            minU = new int[count];
+            maxU = new int[count];
+            minV = new int[count];
+            maxV = new int[count];
+            Arrays.fill(minU, Integer.MAX_VALUE);
+            Arrays.fill(maxU, Integer.MIN_VALUE);
+            Arrays.fill(minV, Integer.MAX_VALUE);
+            Arrays.fill(maxV, Integer.MIN_VALUE);
+        }
+
+        void add(Lithosphere lith, int from, int to) {
+            int[] owner = lith.owner;
+            int[] us = lith.u;
+            int[] vs = lith.v;
+            byte[] type = lith.type;
+            for (int idx = from; idx < to; idx++) {
+                int o = owner[idx];
+                int u = us[idx];
+                int v = vs[idx];
+                long q = (long) u * u + (long) v * v;
+                su[o] += u;
+                sv[o] += v;
+                sq[o] += q;
+                if (type[idx] == Lithosphere.CONTINENTAL) {
+                    cu[o] += u;
+                    cv[o] += v;
+                    cq[o] += q;
+                    cn[o]++;
+                }
+                minU[o] = Math.min(minU[o], u);
+                maxU[o] = Math.max(maxU[o], u);
+                minV[o] = Math.min(minV[o], v);
+                maxV[o] = Math.max(maxV[o], v);
+            }
+        }
+
+        void merge(PlaceSums o) {
+            for (int k = 0; k < su.length; k++) {
+                su[k] += o.su[k];
+                sv[k] += o.sv[k];
+                sq[k] += o.sq[k];
+                cu[k] += o.cu[k];
+                cv[k] += o.cv[k];
+                cq[k] += o.cq[k];
+                cn[k] += o.cn[k];
+                minU[k] = Math.min(minU[k], o.minU[k]);
+                maxU[k] = Math.max(maxU[k], o.maxU[k]);
+                minV[k] = Math.min(minV[k], o.minV[k]);
+                maxV[k] = Math.max(maxV[k], o.maxV[k]);
+            }
+        }
+    }
+
+    /** Centre of area (frame and world), moments and reach of every plate, from its cells' places. */
+    void spinStats() {
+        int count = plates.size();
+        PlaceSums sums = new PlaceSums(count);
+        parallel.cells(grid.size(), (from, to) -> {
+            PlaceSums part = new PlaceSums(count);
+            part.add(lith, from, to);
+            synchronized (sums) {
+                sums.merge(part);
+            }
+        });
+        long[] su = sums.su;
+        long[] sv = sums.sv;
+        long[] sq = sums.sq;
+        long[] cu = sums.cu;
+        long[] cv = sums.cv;
+        long[] cq = sums.cq;
+        int[] cn = sums.cn;
+        int[] minU = sums.minU;
+        int[] maxU = sums.maxU;
+        int[] minV = sums.minV;
+        int[] maxV = sums.maxV;
+        for (Plate p : plates) {
+            int a = p.area;
+            if (!p.alive || a == 0) {
+                continue;
+            }
+            int o = p.id;
+            double pu = (double) su[o] / a;
+            double pv = (double) sv[o] / a;
+            double m2 = pu * pu + pv * pv;
+            p.pivotU = pu;
+            p.pivotV = pv;
+            p.pivotX = p.originI + p.frame.rotX(pu, pv);
+            p.pivotY = p.originJ + p.frame.rotY(pu, pv);
+            p.inertia = Math.max(0.0, sq[o] - a * m2);
+            double cont = Math.max(0.0, cq[o] - 2.0 * (pu * cu[o] + pv * cv[o]) + cn[o] * m2);
+            p.spinDrag = p.inertia + cfg.continentalDrag() * cont;
+            double du = Math.max(pu - minU[o], maxU[o] - pu);
+            double dv = Math.max(pv - minV[o], maxV[o] - pv);
+            p.radius = Math.hypot(du, dv);
+        }
+    }
+
+    /**
+     * Gives the marked plates (by id) fresh frames at angle 0 (D-42): each cell's place is its offset from the
+     * plate's centre, measured from the far side of the plate's widest run of empty columns, so the plate is in
+     * one piece. Nothing moves.
+     */
+    void reframe(boolean[] marked) {
+        int w = grid.width();
+        int count = plates.size();
+        int[] slot = new int[count];
+        int slots = 0;
+        for (int k = 0; k < count; k++) {
+            slot[k] = k < marked.length && marked[k] ? slots++ : -1;
+        }
+        if (slots == 0) {
+            return;
+        }
+        int[] owner = lith.owner;
+        int n = owner.length;
+        int used = slots;
+        // the passes run on the workers: marks are all `true`, and the sums are whole numbers (exact in any order)
+        boolean[] usedColumn = new boolean[used * w];
+        parallel.cells(n, (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                int s = slot[owner[idx]];
+                if (s >= 0) {
+                    usedColumn[s * w + idx % w] = true;
+                }
+            }
+        });
+        int[] start = new int[slots];
+        for (int s = 0; s < slots; s++) {
+            start[s] = windowStart(usedColumn, s * w, w);
+        }
+        long[] sumX = new long[slots];
+        long[] sumY = new long[slots];
+        long[] cells = new long[slots];
+        parallel.cells(n, (from, to) -> {
+            long[] px = new long[used];
+            long[] py = new long[used];
+            long[] pn = new long[used];
+            for (int idx = from; idx < to; idx++) {
+                int s = slot[owner[idx]];
+                if (s >= 0) {
+                    px[s] += Math.floorMod(idx % w - start[s], w);
+                    py[s] += idx / w;
+                    pn[s]++;
+                }
+            }
+            synchronized (sumX) {
+                for (int s = 0; s < used; s++) {
+                    sumX[s] += px[s];
+                    sumY[s] += py[s];
+                    cells[s] += pn[s];
+                }
+            }
+        });
+        int[] cx = new int[slots];
+        int[] cy = new int[slots];
+        for (int k = 0; k < count; k++) {
+            int s = slot[k];
+            if (s < 0 || cells[s] == 0) {
+                continue;
+            }
+            cx[s] = (int) Math.floor((double) sumX[s] / cells[s] + 0.5);
+            cy[s] = (int) Math.floor((double) sumY[s] / cells[s] + 0.5);
+            Plate p = plates.get(k);
+            p.originI = Math.floorMod(start[s] + cx[s], w);
+            p.originJ = cy[s];
+            p.frame.set(0.0);
+        }
+        int[] u = lith.u;
+        int[] v = lith.v;
+        parallel.cells(n, (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                int s = slot[owner[idx]];
+                if (s >= 0) {
+                    u[idx] = Math.floorMod(idx % w - start[s], w) - cx[s];
+                    v[idx] = idx / w - cy[s];
+                }
+            }
+        });
+    }
+
+    /** Fresh frame for one plate (see {@link #reframe(boolean[])}). */
+    void reframe(Plate p) {
+        boolean[] marked = new boolean[plates.size()];
+        marked[p.id] = true;
+        reframe(marked);
+    }
+
+    /** First column after the longest run of columns the plate does not use (wrapping); 0 if it uses all. */
+    private static int windowStart(boolean[] used, int off, int w) {
+        int first = -1;
+        for (int i = 0; i < w; i++) {
+            if (used[off + i]) {
+                first = i;
+                break;
+            }
+        }
+        if (first < 0) {
+            return 0;
+        }
+        int bestLen = 0;
+        int bestStart = 0;
+        int run = 0;
+        for (int k = 1; k <= w; k++) {
+            int i = (first + k) % w;
+            if (!used[off + i]) {
+                run++;
+            } else {
+                if (run > bestLen) {
+                    bestLen = run;
+                    bestStart = i;
+                }
+                run = 0;
+            }
+        }
+        return bestLen == 0 ? 0 : bestStart;
+    }
+
     /** Signed east-west distance in cells, wrapped to [-W/2, W/2). */
     double wrapDelta(double d) {
         int w = grid.width();
@@ -532,7 +897,7 @@ public final class PlateSimulation {
     public CrustBudget crustBudget() {
         double s = grid.cellAreaKm2() / 1e9;
         return new CrustBudget(budgetArc * s, budgetShelf * s, budgetErosion * s, budgetCollision * s,
-                budgetEclogite * s, budgetSubducted * s, budgetForearc * s, budgetClosure * s);
+                budgetEclogite * s, budgetSubducted * s, budgetForearc * s, budgetClosure * s, budgetRounding * s);
     }
 
     /**
@@ -543,19 +908,26 @@ public final class PlateSimulation {
      * @param eclogite  lower crust turned into eclogite keel
      * @param subducted thickened ocean crust (young arcs, plateaus) lost down trenches, beyond normal 7 km crust
      * @param forearc   crust scraped off overriding plates by subduction erosion
+     * @param closure   ocean enclosed by one plate's continent, closed into continent (D-36)
+     * @param rounding  crust beyond new ocean crust copied into single-cell holes that the rotation's rounding opens
+     *                  in turned plates (D-42)
      */
     public record CrustBudget(double arcs, double shelves, double erosion, double collision, double eclogite,
-                              double subducted, double forearc, double closure) {
+                              double subducted, double forearc, double closure, double rounding) {
     }
 
     public StepStats stats() {
         double area = 0;
         double sq = 0;
         long cont = 0;
+        double k = grid.cellKm();
         for (Plate p : plates) {
             if (p.alive) {
                 area += p.area;
                 sq += p.area * (p.vx * p.vx + p.vy * p.vy);
+                if (p.omega != 0.0) {
+                    sq += p.omega * p.omega * p.inertia * k * k; // every cell's speed, spin included (D-42)
+                }
                 cont += p.continentalArea;
             }
         }
@@ -575,7 +947,7 @@ public final class PlateSimulation {
     /**
      * Summary after a step.
      *
-     * @param rmsSpeedCmPerYr       area-weighted RMS plate speed
+     * @param rmsSpeedCmPerYr       area-weighted RMS speed of the cells, drift and spin
      * @param continentalVolumeGkm3 continental crust volume in 10^9 km3 (Earth today: about 7)
      * @param maxKeelKm             thickest dense keel under any crust
      */

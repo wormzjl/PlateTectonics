@@ -18,7 +18,7 @@ class PlateTectonicsTest {
 
     /**
      * A 32 x 16 world of 100 km cells: plate 0 holds columns 0-15, plate 1 columns 16-31; every other plate
-     * the constructor made is emptied (and so dead). Nothing moves until the test sets shifts or velocities.
+     * the constructor made is emptied (and so dead). Nothing moves until the test moves a pose or sets velocities.
      */
     private static PlateSimulation twoPlates(byte typeA, float thickA, float ageA, byte typeB, float thickB, float ageB) {
         PlateSimulation sim = new PlateSimulation(new CylinderGrid(W, H, 100.0), 1L, TectonicsConfig.defaults());
@@ -37,15 +37,23 @@ class PlateTectonicsTest {
         for (Plate p : sim.plates) {
             p.vx = 0;
             p.vy = 0;
-            p.shiftX = 0;
-            p.shiftY = 0;
         }
         sim.refreshStats();
+        boolean[] all = new boolean[sim.plates.size()];
+        Arrays.fill(all, true);
+        sim.reframe(all);
         sim.underthrustCrust = new double[sim.plates.size()];
         sim.underthrustKeel = new double[sim.plates.size()];
         sim.underthrustEclogite = new double[sim.plates.size()];
         sim.seaLevelM = 0.0;
         return sim;
+    }
+
+    /** Moves plate {@code id}'s pose by whole cells; the next substep carries its cells there. */
+    private static void move(PlateSimulation sim, int id, int di, int dj) {
+        Plate p = sim.plates.get(id);
+        p.originI = Math.floorMod(p.originI + di, sim.grid.width());
+        p.originJ += dj;
     }
 
     private static double totalCrust(Lithosphere L) {
@@ -71,7 +79,7 @@ class PlateTectonicsTest {
     @Test
     void oceanSubductsUnderContinentAndBuildsAnArc() {
         PlateSimulation sim = twoPlates(Lithosphere.CONTINENTAL, 35f, 0f, Lithosphere.OCEANIC, 7f, 100f);
-        sim.plates.get(1).shiftX = -1;
+        move(sim, 1, -1, 0);
         PlateMotion.substep(sim, 1.0, 1.0);
         Lithosphere L = sim.lith;
 
@@ -94,7 +102,7 @@ class PlateTectonicsTest {
         PlateSimulation sim = twoPlates(Lithosphere.CONTINENTAL, 35f, 0f, Lithosphere.CONTINENTAL, 35f, 0f);
         Lithosphere L = sim.lith;
         double before = totalCrust(L);
-        sim.plates.get(1).shiftX = -1;
+        move(sim, 1, -1, 0);
         PlateMotion.substep(sim, 1.0, 1.0);
         PlateMotion.distributeUnderthrust(sim);
 
@@ -215,7 +223,7 @@ class PlateTectonicsTest {
             }
         }
         for (int s = 0; s < 5; s++) {
-            sim.plates.get(1).shiftX = -1;
+            move(sim, 1, -1, 0);
             PlateMotion.substep(sim, 1.0, s + 1.0);
         }
         for (int j = 0; j < H; j++) {
@@ -253,6 +261,26 @@ class PlateTectonicsTest {
         assertTrue((L.marks[cell] & Lithosphere.MARK_PLUME) != 0, "post-delamination magmatism");
         double pullAfter = Isostasy.rootPullM(sim, cell);
         assertTrue(pullAfter < 0.0, "the surface rebounds above what the crust alone holds");
+    }
+
+    @Test
+    void crustThinnedBelowItsEclogiteNeverGoesNegative() {
+        // crust piled against a pole edge eclogitizes, then flows away and leaves the eclogite behind
+        PlateSimulation sim = twoPlates(Lithosphere.CONTINENTAL, 60f, 0f, Lithosphere.CONTINENTAL, 60f, 0f);
+        Lithosphere L = sim.lith;
+        Arrays.fill(L.keel, 90f);
+        Arrays.fill(L.eclogite, 100f);
+        boolean delaminated = false;
+        for (int step = 0; step < 50 && !delaminated; step++) {
+            sim.stepIndex = step;
+            OrogenicRoots.update(sim, 10.0);
+            delaminated = sim.events.counts().getOrDefault(GeoEvent.Type.DELAMINATION, 0) > 0;
+            for (int idx = 0; idx < L.n; idx++) {
+                assertTrue(L.eclogite[idx] <= L.thick[idx], "no more eclogite than crust");
+                assertTrue(L.thick[idx] >= 0f && L.sediment[idx] >= 0f, "crust never below zero: " + L.thick[idx]);
+            }
+        }
+        assertTrue(delaminated, "the root drops off");
     }
 
     // ------------------------------------------------------------------ whole runs

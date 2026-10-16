@@ -1,9 +1,10 @@
 package com.platetectonics.geosim.tectonics;
 
 /**
- * One motion substep: every plate shifts by whole cells (at most a few), overlaps are resolved as
- * subduction or collision, gaps are filled with new ocean crust, ocean floor ages, and arcs grow
- * behind the trenches. Moving a rigid plate by whole cells is an exact copy, so no data is blurred.
+ * One motion substep: every cell moves to where its plate's pose puts its place in the plate's raster (D-42;
+ * at most a few cells), overlaps are resolved as subduction or collision, gaps are filled with new ocean
+ * crust, ocean floor ages, and arcs grow behind the trenches. The pose maps a plate's raster onto the world
+ * one-to-one ({@link PlateFrame}), so moving and turning a plate is an exact copy: no data is blurred.
  */
 final class PlateMotion {
     private PlateMotion() {
@@ -30,10 +31,9 @@ final class PlateMotion {
             for (int idx = from; idx < to; idx++) {
                 first[idx] = -1;
                 Plate p = sim.plates.get(L.owner[idx]);
-                int i = idx % w;
-                int j = idx / w;
-                int ti = Math.floorMod(i + p.shiftX, w);
-                int tj = j + p.shiftY;
+                long at = p.frame.forward(L.u[idx], L.v[idx]);
+                int ti = Math.floorMod(p.originI + PlateFrame.x(at), w);
+                int tj = p.originJ + PlateFrame.y(at);
                 if (tj < 0 || tj >= h) {
                     if (L.type[idx] != Lithosphere.CONTINENTAL) {
                         target[idx] = -1; // ocean floor pushed past a pole is consumed
@@ -73,6 +73,7 @@ final class PlateMotion {
                 resolveOverlap(sim, t, idx);
             }
         }
+        reframePoleCells(sim);
 
         fillGaps(sim, now);
         L.swap();
@@ -110,6 +111,32 @@ final class PlateMotion {
             L.thick[t] -= removed;
             L.sediment[t] = Math.min(L.sediment[t], L.thick[t]);
             sim.budgetForearc += removed;
+        }
+    }
+
+    /**
+     * Continent held at a pole edge has moved relative to its plate: it takes the place in the plate's raster
+     * that lands on its cell. Any cell of the plate that held that place landed there too and was stacked
+     * into it, so places stay one per cell.
+     */
+    private static void reframePoleCells(PlateSimulation sim) {
+        Lithosphere L = sim.lith;
+        int w = sim.grid.width();
+        int h = sim.grid.height();
+        for (int k = 0; k < 2 * w; k++) {
+            int t = k < w ? k : (h - 1) * w + (k - w);
+            int o = L.owner2[t];
+            if (o < 0) {
+                continue;
+            }
+            Plate p = sim.plates.get(o);
+            long at = p.frame.forward(L.u2[t], L.v2[t]);
+            int row = t / w - p.originJ;
+            if (PlateFrame.y(at) != row) {
+                long uv = p.frame.inverse(PlateFrame.x(at), row);
+                L.u2[t] = PlateFrame.x(uv);
+                L.v2[t] = PlateFrame.y(uv);
+            }
         }
     }
 
@@ -308,6 +335,12 @@ final class PlateMotion {
     /**
      * Cells no plate moved into are new ocean floor (spreading). Each gap cell joins the plate it borders;
      * wider gaps are filled breadth-first, so the ridge ends up near the middle of the opening.
+     * <p>
+     * A single cell enclosed on all sides by one turned plate is not an opening but rounding (D-42): the
+     * plate's raster, built up at the ridges at many angles, has a gap there, and this angle lands it inside
+     * the plate. It takes a copy of a neighbour's crust, ocean floor if any neighbour has it (so rifted margins
+     * do not grow continent), and the place in the raster is filled for good. What the copy holds beyond new
+     * ocean crust is counted in the crust budget, as for subduction.
      */
     private static void fillGaps(PlateSimulation sim, double now) {
         float crust = (float) sim.cfg.oceanCrustKm();
@@ -316,6 +349,8 @@ final class PlateMotion {
         int h = sim.grid.height();
         int n = sim.grid.size();
         int[] queue = sim.queue;
+        int[] holes = sim.moveLater; // free once the overlaps are resolved
+        int holeCount = 0;
         int head = 0;
         int tail = 0;
         // first ring: gaps touching existing crust (decided against the pre-fill state)
@@ -325,13 +360,28 @@ final class PlateMotion {
             }
             int src = firstOwnedNeighbour(L.owner2, idx, w, h);
             if (src >= 0) {
-                queue[tail++] = idx;
+                if (enclosedByTurnedPlate(sim, idx, L.owner2[src], w, h)) {
+                    holes[holeCount++] = idx;
+                } else {
+                    queue[tail++] = idx;
+                }
                 sim.dist[idx] = src; // remember the source plate cell temporarily
             }
         }
+        for (int k = 0; k < holeCount; k++) {
+            int idx = holes[k];
+            int src = oceanicNeighbour(L, idx, sim.dist[idx], w, h);
+            L.copyWithinBack(src, idx);
+            placeNextTo(sim, src, idx);
+            sim.budgetRounding += Math.max(0.0, L.thick2[src] - crust);
+            sim.dist[idx] = -1;
+        }
+        sim.roundingHoleCells += holeCount;
         for (int k = 0; k < tail; k++) {
             int idx = queue[k];
-            newOcean(L, idx, L.owner2[sim.dist[idx]], now, crust);
+            int src = sim.dist[idx];
+            newOcean(L, idx, L.owner2[src], now, crust);
+            placeNextTo(sim, src, idx);
             sim.dist[idx] = -1;
         }
         // remaining gaps: breadth-first from the first ring
@@ -339,25 +389,73 @@ final class PlateMotion {
             int idx = queue[head++];
             int i = idx % w;
             int j = idx / w;
-            int owner = L.owner2[idx];
-            tail = claim(L, queue, tail, j * w + (i + 1 == w ? 0 : i + 1), owner, now, crust);
-            tail = claim(L, queue, tail, j * w + (i == 0 ? w - 1 : i - 1), owner, now, crust);
+            tail = claim(sim, queue, tail, idx, j * w + (i + 1 == w ? 0 : i + 1), now, crust);
+            tail = claim(sim, queue, tail, idx, j * w + (i == 0 ? w - 1 : i - 1), now, crust);
             if (j > 0) {
-                tail = claim(L, queue, tail, idx - w, owner, now, crust);
+                tail = claim(sim, queue, tail, idx, idx - w, now, crust);
             }
             if (j < h - 1) {
-                tail = claim(L, queue, tail, idx + w, owner, now, crust);
+                tail = claim(sim, queue, tail, idx, idx + w, now, crust);
             }
         }
         sim.newOceanCells += tail;
     }
 
-    private static int claim(Lithosphere L, int[] queue, int tail, int idx, int owner, double now, float crust) {
+    private static int claim(PlateSimulation sim, int[] queue, int tail, int from, int idx, double now, float crust) {
+        Lithosphere L = sim.lith;
         if (L.owner2[idx] < 0) {
-            newOcean(L, idx, owner, now, crust);
+            newOcean(L, idx, L.owner2[from], now, crust);
+            placeNextTo(sim, from, idx);
             queue[tail++] = idx;
         }
         return tail;
+    }
+
+    /**
+     * New crust at back cell {@code idx} takes the place in its plate's raster that lands on it, found from its
+     * neighbour {@code from} of the same plate (which fixes the column across the date line). No cell of the
+     * plate holds that place, or it would have landed on {@code idx}.
+     */
+    private static void placeNextTo(PlateSimulation sim, int from, int idx) {
+        Lithosphere L = sim.lith;
+        int w = sim.grid.width();
+        Plate p = sim.plates.get(L.owner2[idx]);
+        long at = p.frame.forward(L.u2[from], L.v2[from]);
+        int dj = idx / w - from / w;
+        int di = dj != 0 ? 0 : (idx % w == (from % w + 1) % w ? 1 : -1);
+        long uv = p.frame.inverse(PlateFrame.x(at) + di, PlateFrame.y(at) + dj);
+        L.u2[idx] = PlateFrame.x(uv);
+        L.v2[idx] = PlateFrame.y(uv);
+    }
+
+    /** The first ocean-floor neighbour of back cell {@code idx}, else {@code first}. */
+    private static int oceanicNeighbour(Lithosphere L, int idx, int first, int w, int h) {
+        int i = idx % w;
+        int j = idx / w;
+        for (int m = 0; m < 4; m++) {
+            int nb = m == 0 ? j * w + (i + 1 == w ? 0 : i + 1)
+                    : m == 1 ? j * w + (i == 0 ? w - 1 : i - 1)
+                    : m == 2 ? (j > 0 ? idx - w : -1)
+                    : (j < h - 1 ? idx + w : -1);
+            if (nb >= 0 && L.type2[nb] == Lithosphere.OCEANIC) {
+                return nb;
+            }
+        }
+        return first;
+    }
+
+    /** Whether every neighbour of gap cell {@code idx} belongs to plate {@code o}, and that plate is turned. */
+    private static boolean enclosedByTurnedPlate(PlateSimulation sim, int idx, int o, int w, int h) {
+        if (sim.plates.get(o).frame.identity()) {
+            return false;
+        }
+        int[] owner = sim.lith.owner2;
+        int i = idx % w;
+        int j = idx / w;
+        return owner[j * w + (i + 1 == w ? 0 : i + 1)] == o
+                && owner[j * w + (i == 0 ? w - 1 : i - 1)] == o
+                && (j == 0 || owner[idx - w] == o)
+                && (j == h - 1 || owner[idx + w] == o);
     }
 
     private static int firstOwnedNeighbour(int[] owner, int idx, int w, int h) {

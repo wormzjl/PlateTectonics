@@ -26,6 +26,7 @@ A Minecraft 1.21.1 (NeoForge) world-generation mod that builds worlds from a sim
 CLI flags (`--help` lists all):
 
 - `--age MYR`, `--cell-km K` (or `--width W`), `--frame-every MYR` (0 = no timeline GIF), `--out DIR`.
+- `--gif-width PX`, `--gif-delay MS` (time per frame, default 80 ms), `--gif-panels`: each frame shows every map in a grid (`--gif-width` is then the width of one map), a header of global numbers and a chart of the global history so far.
 - `--history random|earth`: a random life and climate history (default) or the Earth-like preset.
 - `--plates-only`: the Phase 2 plate engine alone, with no climate or erosion.
 - `--set CONSTANT=VALUE`: override one `TectonicsConfig` or `SurfaceConfig` constant for this run (repeatable).

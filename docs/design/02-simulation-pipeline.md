@@ -23,7 +23,7 @@ As built in Phase 3 (`PlanetSimulation.step`):
 ```
  1. Global state      box models: Sun, mantle, degassing, O2, CO2 and temperature,
                       life milestones (from the planet of the previous step)           → 07
- 2. Plates            sea level; velocities (force balance); motion; subduction,
+ 2. Plates            sea level; velocities and spins (force balance); motion; subduction,
                       collision, ridges; subduction erosion; arcs; underthrusting,
                       crustal flow, roots; plumes, rifts, reorganization, basin closure → 03
  3. Sea level         fill the ocean to its water volume (hypsometry)                  → 04

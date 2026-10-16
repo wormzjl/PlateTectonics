@@ -53,6 +53,8 @@ public final class Main {
         double age = 4500;
         double frameEvery = 25;
         int gifWidth = 720;
+        int gifDelayMs = 80;
+        boolean gifPanels = false;
         double reportEvery = 250;
         boolean platesOnly = false;
         int threads = Runtime.getRuntime().availableProcessors();
@@ -72,6 +74,8 @@ public final class Main {
                 case "--age" -> age = Double.parseDouble(args[++k]);
                 case "--frame-every" -> frameEvery = Double.parseDouble(args[++k]);
                 case "--gif-width" -> gifWidth = Integer.parseInt(args[++k]);
+                case "--gif-delay" -> gifDelayMs = Integer.parseInt(args[++k]);
+                case "--gif-panels" -> gifPanels = true;
                 case "--report-every" -> reportEvery = Double.parseDouble(args[++k]);
                 case "--plates-only" -> platesOnly = true;
                 case "--threads" -> threads = Integer.parseInt(args[++k]);
@@ -89,7 +93,8 @@ public final class Main {
                     System.out.println("geosim-cli --seed N [--width W | --cell-km K] --age MYR [--history random|earth] "
                             + "[--plates-only] [--set CONSTANT=VALUE ...] --frame-every MYR --gif-width PX --report-every MYR --scale S "
                             + "--ocean-depth M --threads N [--master] [--block-view X,Z[,PIXELS[,BLOCKS_PER_PIXEL]] ...] --out DIR");
-                    System.out.println("  --frame-every 0 skips the timeline GIF");
+                    System.out.println("  --frame-every 0 skips the timeline GIF; --gif-delay MS sets its speed (80 ms per frame)");
+                    System.out.println("  --gif-panels draws every map in each frame (--gif-width is then the width of one map)");
                     System.out.println("  --master writes master.ptw, the file a Minecraft world loads");
                     System.out.println("  --block-view renders the terrain as chunk generation builds it, centred on block X,Z");
                     System.out.println("  --threads defaults to all cores; every count gives the same planet");
@@ -139,11 +144,13 @@ public final class Main {
         sim.setParallel(parallel);
         long tInit = System.nanoTime();
 
-        GifWriter gif = frameEvery > 0 ? new GifWriter(dir.resolve("timeline.gif"), 80) : null;
+        GifWriter gif = frameEvery > 0 ? new GifWriter(dir.resolve("timeline.gif"), gifDelayMs) : null;
+        PanelFrames panels = gif != null && gifPanels && !platesOnly ? new PanelFrames(gifWidth, age, seed) : null;
         long renderNanos = 0;
         double nextFrame = 0;
         double nextReport = 0;
         int steps = 0;
+        boolean turnsMarked = false;
         try (PrintWriter history = new PrintWriter(Files.newBufferedWriter(dir.resolve("history.csv")))) {
             history.println("time_myr,luminosity,mantle_tp_c,degassing,temp_c,pco2_ppm,o2_pal,organic_burial,"
                     + "methane_c,snowball,land_fraction,ice_fraction,land_weathering,erosion_m_per_myr,sea_level_m");
@@ -152,7 +159,11 @@ public final class Main {
                 double now = sim.timeMyr();
                 if (gif != null && now >= nextFrame - 1e-6) {
                     long r0 = System.nanoTime();
-                    gif.write(TectonicMaps.frame(frame(sim), gifWidth, caption(sim)));
+                    if (panels == null) {
+                        gif.write(TectonicMaps.frame(frame(sim), gifWidth, caption(sim)));
+                    } else if (now > 0.0) {
+                        gif.write(panels.render(sim)); // the climate and surface maps exist from the first step on
+                    }
                     renderNanos += System.nanoTime() - r0;
                     nextFrame += frameEvery;
                 }
@@ -163,9 +174,16 @@ public final class Main {
                 if (now >= age - 1e-6) {
                     break;
                 }
+                if (!turnsMarked && now >= age - 500.0 - 1e-6) {
+                    sim.plates().markTurns();
+                    turnsMarked = true;
+                }
                 sim.step(Math.min(PlanetSimulation.eraStepMyr(now, age), age - now));
                 steps++;
                 logHistory(sim, history);
+                if (panels != null) {
+                    panels.record(sim);
+                }
             }
         }
         if (gif != null) {
@@ -206,9 +224,10 @@ public final class Main {
 
         PlateSimulation.CrustBudget b = plates.crustBudget();
         System.out.printf(Locale.ROOT,
-                "crust budget (10^9 km3): arcs +%.2f, shelves +%.2f, basin closure +%.2f, erosion -%.2f, collision -%.2f, "
-                        + "eclogite -%.2f, subducted arc/plateau -%.2f, subduction erosion -%.2f%n",
-                b.arcs(), b.shelves(), b.closure(), b.erosion(), b.collision(), b.eclogite(), b.subducted(), b.forearc());
+                "crust budget (10^9 km3): arcs +%.2f, shelves +%.2f, basin closure +%.2f, rotation rounding +%.3f, erosion -%.2f, "
+                        + "collision -%.2f, eclogite -%.2f, subducted arc/plateau -%.2f, subduction erosion -%.2f%n",
+                b.arcs(), b.shelves(), b.closure(), b.rounding(), b.erosion(), b.collision(), b.eclogite(), b.subducted(),
+                b.forearc());
         if (!platesOnly) {
             SurfaceProcesses.Budget sb = sim.surface().budget();
             System.out.printf(Locale.ROOT,
@@ -223,6 +242,7 @@ public final class Main {
             printTimeline(sim);
         }
         printHypsometry(sim);
+        printSpin(sim);
         if (!platesOnly) {
             printSeaFloor(sim);
             printBiomes(sim);
@@ -424,6 +444,85 @@ public final class Main {
      * The sea floor against Earth: ocean area by depth, shelf width, sediment piles, land built from the sea,
      * sea level and the water that ocean-floor sediment displaces (docs/design/04-surface-processes.md#sea-floor).
      */
+    /** Plate spin and turn (D-42), boundary types and coast orientations. */
+    private static void printSpin(PlanetSimulation sim) {
+        PlateSimulation plates = sim.plates();
+        int n = sim.grid().size();
+        double[] sum = new double[2];
+        double[] max = new double[2];
+        int[] count = new int[2];
+        java.util.List<com.platetectonics.geosim.tectonics.Plate> alive = new java.util.ArrayList<>();
+        for (var p : plates.plates()) {
+            if (!p.alive()) {
+                continue;
+            }
+            alive.add(p);
+            int c = p.area() >= 0.05 * n ? 0 : 1;
+            double s = Math.abs(p.spinDegPerMyr());
+            sum[c] += s;
+            max[c] = Math.max(max[c], s);
+            count[c]++;
+        }
+        System.out.printf(Locale.ROOT, "spin (deg/Myr): %d plates over 5%% of the surface, mean %.2f (max %.2f); %d smaller, "
+                        + "mean %.2f (max %.2f) | RMS speed %.2f cm/yr, of which spin alone %.2f%n",
+                count[0], count[0] > 0 ? sum[0] / count[0] : 0.0, max[0], count[1], count[1] > 0 ? sum[1] / count[1] : 0.0,
+                max[1], plates.stats().rmsSpeedCmPerYr(), plates.spinRmsCmPerYr());
+        alive.sort((a, b) -> Integer.compare(b.continentalArea(), a.continentalArea()));
+        long cont = 0;
+        for (var p : alive) {
+            cont += p.continentalArea();
+        }
+        StringBuilder turns = new StringBuilder();
+        for (int k = 0; k < Math.min(3, alive.size()); k++) {
+            var p = alive.get(k);
+            turns.append(String.format(Locale.ROOT, "%s%.0f%% of the continent %+.0f deg", k == 0 ? "" : ", ",
+                    100.0 * p.continentalArea() / Math.max(1, cont), p.turnSinceMarkDeg()));
+        }
+        System.out.println("turn over the last 500 Myr (clockwise +), plates with the most continent: " + turns
+                + String.format(Locale.ROOT, " | rounding holes filled: %d cells (%.1f%% of the new ocean floor) | %d substeps",
+                plates.roundingHoleCells(), 100.0 * plates.roundingHoleCells() / Math.max(1L, plates.totalNewOceanCells()),
+                plates.totalSubsteps()));
+        double[] b = plates.boundaryShares();
+        System.out.printf(Locale.ROOT, "plate boundaries: converging %.0f%%, diverging %.0f%%, transform %.0f%% (by local motion)%n",
+                100 * b[0], 100 * b[1], 100 * b[2]);
+        // coast orientation: Sobel gradient of the land mask at land cells next to the sea
+        float[] e = sim.elevationAboveSeaM();
+        int w = sim.grid().width();
+        int h = sim.grid().height();
+        long[] bins = new long[4];
+        for (int j = 1; j < h - 1; j++) {
+            for (int i = 0; i < w; i++) {
+                int idx = j * w + i;
+                if (e[idx] < 0f) {
+                    continue;
+                }
+                int ie = (i + 1) % w;
+                int iw = (i + w - 1) % w;
+                if (e[j * w + ie] >= 0f && e[j * w + iw] >= 0f && e[idx - w] >= 0f && e[idx + w] >= 0f) {
+                    continue;
+                }
+                double gx = land(e, j - 1, ie, w) + 2 * land(e, j, ie, w) + land(e, j + 1, ie, w)
+                        - land(e, j - 1, iw, w) - 2 * land(e, j, iw, w) - land(e, j + 1, iw, w);
+                double gy = land(e, j + 1, iw, w) + 2 * land(e, j + 1, i, w) + land(e, j + 1, ie, w)
+                        - land(e, j - 1, iw, w) - 2 * land(e, j - 1, i, w) - land(e, j - 1, ie, w);
+                if (gx == 0 && gy == 0) {
+                    continue;
+                }
+                // the coast runs at right angles to the gradient; bins of 45 degrees centred on N-S, NE-SW, E-W, NW-SE
+                double a = Math.toDegrees(Math.atan2(-gy, gx)); // y up
+                int bin = (int) Math.floor(Math.floorMod((int) Math.round(a + 22.5), 180) / 45.0);
+                bins[bin]++;
+            }
+        }
+        double t = Math.max(1L, bins[0] + bins[1] + bins[2] + bins[3]);
+        System.out.printf(Locale.ROOT, "coast orientation: N-S %.0f%%, NW-SE %.0f%%, E-W %.0f%%, NE-SW %.0f%% (25%% each if none is preferred)%n",
+                100 * bins[0] / t, 100 * bins[1] / t, 100 * bins[2] / t, 100 * bins[3] / t);
+    }
+
+    private static int land(float[] e, int j, int i, int w) {
+        return e[j * w + i] >= 0f ? 1 : 0;
+    }
+
     private static void printSeaFloor(PlanetSimulation sim) {
         float[] e = sim.elevationAboveSeaM();
         var flow = sim.surface().flow();

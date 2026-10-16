@@ -43,6 +43,11 @@ final class OrogenicRoots {
         // each cell's roots change from its own column only
         sim.parallel.cells(n, (from, to) -> {
             for (int idx = from; idx < to; idx++) {
+                // eclogite is part of the crust: when flow or a pole edge thins a column below its eclogite
+                // (crust piled against a pole edge and then spread away), the whole column is eclogite
+                if (L.eclogite[idx] > L.thick[idx]) {
+                    L.eclogite[idx] = Math.max(0f, L.thick[idx]);
+                }
                 if (L.type[idx] == Lithosphere.CONTINENTAL && L.thick[idx] > depth) {
                     double target = cfg.eclogiteMaxFraction() * (L.thick[idx] - depth);
                     if (L.eclogite[idx] < target) {
@@ -151,9 +156,10 @@ final class OrogenicRoots {
                     continue;
                 }
                 removed += Math.max(0.0, load(sim, idx) - loadMin);
-                L.thick[idx] -= L.eclogite[idx];
+                float drop = Math.min(L.eclogite[idx], Math.max(0f, L.thick[idx]));
+                L.thick[idx] -= drop;
                 L.sediment[idx] = Math.min(L.sediment[idx], L.thick[idx]);
-                sim.budgetEclogite += L.eclogite[idx];
+                sim.budgetEclogite += drop;
                 L.eclogite[idx] = 0f;
                 L.keel[idx] = Math.min(L.keel[idx], hot);
                 L.marks[idx] |= Lithosphere.MARK_PLUME;
