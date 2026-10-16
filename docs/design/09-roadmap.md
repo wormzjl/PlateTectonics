@@ -53,14 +53,19 @@
   | 31.25 km | 8 (before faster spreading and routing) | 177 | 1.9 min | 39 / 6 / 67 s |
   | 31.25 km | 16 (before faster spreading and routing) | 177–189 | 1.9–2.0 min | 39–41 / 6 / 68–74 s |
   | 31.25 km | 16 | **138** | **1.5 min** | 39 / 6 / 43 s |
+  | 31.25 km | 16 (world-model refinement, round fans) | 258 | 2.8 min | 51 / 7 / 107 s |
+  | 31.25 km | 16 (round fans, walks made ahead) | **235** | **2.5 min** | 55 / 8 / 87 s |
   | 78 km | 1 | 24.4 (before: 26.9) | 16 s | 6.4 / 2.2 / 6.8 s |
   | 78 km | 8 | 16.7 (before: 20.5) | 11 s | 4.2 / 1.1 / 5.2 s |
   | 78 km | 16 | 15.9 (before: 19.7) | 10 s | 4.1 / 1.1 / 4.9 s |
+  | 78 km | 16 (world-model refinement, round fans) | 23.6–23.9 | 15 s | 5.4 / 1.5 / 8.0 s |
+  | 78 km | 16 (round fans, walks made ahead) | 21.2–21.4 | 14 s | 5.2 / 1.5 / 6.7 s |
+  | 78 km | 1 (round fans; no walks ahead on one thread) | 39.5 (before: 39.3) | 25 s | 10.2 / 4.6 / 10.3 s |
 
   Every thread count writes byte-identical maps, history and events (D-5; `PlanetSimulationTest` checks 1 vs 5 threads). Per-cell loops run in parallel: the plate move copy (the largest cost, memory-bound), ocean ageing, elevations and sea level, temperature, the moisture sweeps (by row) and mixing, sea-floor sediment, weathering and the routing setup. What stays on one thread follows drainage order or shares material between cells.
 - **Faster spreading and routing (same results):** marine spreading (~27% of the main thread) and Priority-Flood routing (~23%) were the sequential bottleneck. Both still visit cells in exactly the same order, so every output stays byte-identical, but each cell costs less:
   - Marine spreading runs a breadth-first search from each river mouth, ~25,000 mouths per step at 31.25 km. 14% of mouths pass the shelf with sediment left and search the whole apron radius (~900 cells each); they cause 80% of the search work. Each queue entry now carries its distance and row, and one stamp test skips both land and visited cells.
-  - (Replaced by the ring queue of D-40, which draws round fans but costs more; see [World-model refinement](#world-model-refinement).)
+  - (Replaced by the ring queue of D-40, which draws round fans but costs more, then made faster with walks made ahead; see [World-model refinement](#world-model-refinement).)
   - The routing heap packs key and cell into one `long` and picks the smaller child without a branch. Ties keep the old heap's order ([02 § Determinism](02-simulation-pipeline.md#determinism-d-5)).
   - Result at 16 threads: routing 25 → 13 s and spreading 28 → 14–16 s per world; surface 68–74 → 43 s. Plates and surface now take about the same time.
 - **Tuning method:** sweeps of one JVM per variant, 6–8 at a time, at 78 km to find directions, then confirmation at 31.25 km. Erosion constants were tuned against present-day land erosion (Earth ~50 m/Myr) and continental hypsometry.
@@ -117,7 +122,12 @@ Owner request (2026-10-16): "Refine the world model and parameters before furthe
   | 31.25 km | 1 | 46% | 43% | 8% | 246 m | 61 Myr | 14 / 35 / 21 | 1,820 Myr |
 
   Earth: ~40% continental crust, 29% land, desert ~20 / forest ~31 / ice ~10% of land, ocean floor ~64 Myr, GOE ~2,100 Myr after formation. Cells more than 800 m above all eight neighbours fell from 463 to 81 at 78 km; those left are sediment wedges at trenches, forearc highs and thick crust at orogen edges. The thickest sediment is 27–54 km (it was 1,200+ km). Delta-plain dumping fell from 9 to 0.7–1.2 × 10⁹ km³.
-- **Cost.** A 31.25 km world takes ~3 min (plates 51 s, climate 7 s, surface 117 s; it was 1.5 min). Most of the increase is marine spreading: round fans search ~1.4× the cells of the old diamonds, and each visit costs more. Basin closure adds ~12 s to the plates. A faster apron scheme (deposit by row spans instead of searching every cell of each fan) is the obvious follow-up.
+- **Cost.** A 31.25 km world takes ~2.5 min (plates 51–55 s, climate 7–8 s, surface 87 s; it was 1.5 min before this refinement). Most of the increase is marine spreading: round fans search ~1.4× the cells of the old diamonds, and each visit costs more. Basin closure adds ~12 s to the plates.
+- **Faster round spreading (same results).** Owner request: speed up round marine spreading without changing what it builds. Every thread count still writes byte-identical maps, history and events (checked at 78 km on 1, 2 and 16 threads and at 31.25 km on 16).
+  - How: walks made ahead on the workers, replayed in cell order ([04 § Sea floor](04-surface-processes.md#sea-floor), D-40).
+  - Marine spreading per world, 16 threads: 78 km 3.7 → 2.1 s; 31.25 km 69 → 46 s (17 s walking ahead on the workers, 29 s replay on the calling thread). Surface step: 8.0 → 6.7 s and 107 → 87 s. One thread does not walk ahead and is ~5% slower in the surface step (each ring is copied before it is used).
+  - What limits it: the replay reads each cell's elevation once (memory-bound), and the 4% of walks that stop short are carried on by one thread (~0.8 × 10⁹ cells at 31.25 km). Breadth-first spreading took 1.35 s at 78 km, so round fans still cost more.
+  - Tried and dropped: walking ahead while the replay runs (the replay slowed by 40% sharing cores with the workers, net slower); walks ahead from the sea floor at the batch start, without the worker's own deposits (about twice as many short walks); bands of mouth index instead of columns (neighbours one row up sit dozens of mouths earlier); remembering last step's reach per mouth (8% fewer short walks, no faster).
 - **Known gaps** (not in this scope):
   - Land is 33–43%, above Earth's 29%; continental interiors stand only 120–250 m above sea level, so flat platforms flood or drain with small sea-level changes. Freeboard (cratonic buoyancy, dynamic topography) is not modelled.
   - No ocean currents or subtropical highs: no hyper-arid desert cores, so deserts cover 6–14% of land; ice covers 13–21%.

@@ -253,6 +253,11 @@ public final class FlowRouting {
         return ocean[idx];
     }
 
+    /** Ocean cells of the last routing (read only; the same array every step). */
+    boolean[] oceanMask() {
+        return ocean;
+    }
+
     /** True inside a filled depression (the water stands at least half a metre deep). */
     public boolean isLake(int idx) {
         return !ocean[idx] && filled[idx] > elevation[idx] + 0.5f;
