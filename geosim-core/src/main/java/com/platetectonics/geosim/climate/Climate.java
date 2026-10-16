@@ -21,7 +21,7 @@ public final class Climate {
     /** Distance from the nearest ocean cell, km (0 at sea). */
     public final float[] coastDistanceKm;
 
-    /** Water held in ice, m over the whole planet. */
+    /** Water held in ice, m over the whole planet; each cell counts at a sphere's area for its latitude (D-43). */
     public double iceWaterEquivalentM;
     /** Weathering strength of the land, 1 = Earth today (for the carbon thermostat). */
     public double landWeathering;

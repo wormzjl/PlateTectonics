@@ -43,6 +43,8 @@ public final class ClimateModel {
     /** Forest cover 0..1 times tropical warmth, per cell: where forests drive their own convection. */
     private final float[] convection;
     private final double[] weatheringScratch;
+    /** A sphere's area per row relative to the map's, (pi/2) cos(latitude): weights the water held in ice. */
+    private final double[] sphereWeight;
     private Parallel parallel = Parallel.SERIAL;
 
     public ClimateModel(CylinderGrid grid) {
@@ -58,6 +60,10 @@ public final class ClimateModel {
         this.dist = new int[grid.size()];
         this.mixScratch = new float[grid.size()];
         this.weatheringScratch = new double[grid.size()];
+        this.sphereWeight = new double[grid.height()];
+        for (int j = 0; j < grid.height(); j++) {
+            sphereWeight[j] = Math.PI / 2.0 * Math.cos(Math.toRadians(grid.latitudeDeg(j)));
+        }
     }
 
     /** Worker threads for the row and cell loops (results do not depend on the count). */
@@ -391,12 +397,15 @@ public final class ClimateModel {
                 tail = visitIce(ice, idx, idx + w, tail);
             }
         }
+        // the water the ice holds counts each cell at a sphere's area for its latitude, (pi/2) cos(latitude),
+        // which averages 1 over the map: linear latitude gives the poles 2.5 times a sphere's area (D-7), and
+        // ice there would otherwise swing sea level far more than Earth's ice can (D-43)
         double volume = 0.0;
         for (int idx = 0; idx < n; idx++) {
             if (ice[idx] > 0f) {
                 double d = (Math.max(0, dist[idx]) + 0.5) * grid.cellKm() * 1000.0;
                 ice[idx] = (float) Math.min(4_000.0, Math.sqrt(2.0 * ICE_YIELD_PA * d / ICE_RHO_G));
-                volume += ice[idx];
+                volume += ice[idx] * sphereWeight[idx / w];
             }
         }
         c.iceWaterEquivalentM = volume * 0.917 / n;

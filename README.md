@@ -27,6 +27,7 @@ CLI flags (`--help` lists all):
 
 - `--age MYR`, `--cell-km K` (or `--width W`), `--frame-every MYR` (0 = no timeline GIF), `--out DIR`.
 - `--gif-width PX`, `--gif-delay MS` (time per frame, default 80 ms), `--gif-panels`: each frame shows every map in a grid (`--gif-width` is then the width of one map), a header of global numbers and a chart of the global history so far.
+- `--sea-drivers`: writes `sea_drivers.csv`, which per step gives the part of sea level due to ice, ocean-floor age and seafloor sediment, the land share at fixed levels, land, erosion and sediment by height band, and sea level under the rules before D-43 ([land share stability plan](docs/reports/Land%20share%20stability%20plan.md)). Measurement only; the planet is unchanged.
 - `--history random|earth`: a random life and climate history (default) or the Earth-like preset.
 - `--plates-only`: the Phase 2 plate engine alone, with no climate or erosion.
 - `--set CONSTANT=VALUE`: override one `TectonicsConfig` or `SurfaceConfig` constant for this run (repeatable).

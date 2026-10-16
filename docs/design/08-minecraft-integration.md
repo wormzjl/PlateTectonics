@@ -87,7 +87,7 @@ TFC assigns `OverworldClimateModel` automatically. It reads our ChunkData averag
 | `planet_quick` | same, `grid_width` 512 | 78 km, a world in ~15 s |
 | `planet_tfc` | `platetectonics:planet_tfc` + `platetectonics:planet_tfc` | Loaded only with TFC (`neoforge:conditions` mod_loaded; the tag entry is `required: false`). Carries TFC's own `tfc_settings` (rock layers); `temperature_scale` is reset from S at load (333,333 at 30 m/block, D-7) |
 
-**Planet settings** (`planet` object; all optional): `meters_per_block` (30), `grid_width` (1,280), `age_myr` (4,500), `history` (random / earth), `ocean_depth_m` (2,640; D-41, D-42). The seed is the world seed.
+**Planet settings** (`planet` object; all optional): `meters_per_block` (30), `grid_width` (1,280), `age_myr` (4,500), `history` (random / earth), `ocean_depth_m` (2,640; D-41, D-42, D-44). The seed is the world seed.
 
 **Load or simulate** (`PlanetLoader`, on `ServerAboutToStartEvent`, before any level exists):
 - If `<world>/data/platetectonics/master.ptw` exists, it is read. A settings mismatch logs a warning and keeps the saved planet.

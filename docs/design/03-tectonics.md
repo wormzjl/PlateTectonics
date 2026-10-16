@@ -155,10 +155,13 @@ Why Tibet stands ~5 km high and does not sink, and how the model reproduces it (
 
 ```
 continental: e = 0.1515 × (H − S − 33 km) + 0.2727 × S − 0.013 × keel − 0.13 × eclogite   (km; keel < 0 = hot, pushes up)
-oceanic:     e = −(2.5 km + 0.35 km × √(age / Myr)), at most −6 km; + 0.1515 × (H − S − 7 km) for plateaus and arcs;
+oceanic:     e = −(2.6 km + 0.365 km × √t) for t < 20 Myr, else −(5.651 km − 2.473 km × e^(−0.0278 t))   (GDH1, D-43);
+             + 0.1515 × (H − S − 7 km) for plateaus and arcs;
              + 0.396 × S (sediment fills water)
 sea level:   the level at which the oceans hold the configured water volume (fast 1 m histogram fill)
 ```
+
+Ocean floor follows GDH1 (Stein & Stein 1992), Earth's measured plate-cooling curve: it deepens as √age while young, then flattens toward 5.65 km (5.5 km at 100 Myr). Until D-43 the model used 2.5 + 0.35 √t km down to a 6 km floor, which kept deepening old floor 2–4× faster than Earth's and made sea level swing with the mean age of the ocean floor ([land share plan](../reports/Land%20share%20stability%20plan.md)).
 
 H is the whole crust and S its sediment (2.4 g/cm³ against 2.8 for crystalline crust, so sediment floats higher). **S never exceeds H** (D-38): if a process thinned the crust under its sediment, the formula would read negative crystalline crust and raise a lone pillar to the 6.5 km cap. Before D-38 that happened (crustal flow moved crust but left the sediment, and the cap hid piles of up to 1,200 km of sediment from erosion), and it was the source of the single-cell spikes on the maps.
 
@@ -172,7 +175,7 @@ In `--plates-only` runs an **erosion stand-in** relaxes crust thicker than 35 km
 - Paeth 1986, *A fast algorithm for general raster rotation* (rotation by three shears).
 - Cortial et al. 2019, *Procedural Tectonic Planets* (subduction, collision and rifting rules).
 - Forsyth & Uyeda 1975 (driving forces).
-- Parsons & Sclater 1977 (ocean depth vs age).
+- Parsons & Sclater 1977 (ocean depth vs age); Stein & Stein 1992 (GDH1, the depth–age curve used).
 - Dhuime et al. 2012 (continental growth curve).
 - von Huene & Scholl 1991; Scholl & von Huene 2007 (subduction erosion and crustal recycling rates).
 - Plateau support: England & Houseman 1989; Molnar et al. 1993; Clark & Royden 2000; Hetényi 2007; Garzione et al. 2017. Full list in the [research notes](../research_notes/Tibetan%20plateau%20support/tibetan_plateau_support.md).

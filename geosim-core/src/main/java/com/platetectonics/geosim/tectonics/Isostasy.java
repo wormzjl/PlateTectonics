@@ -21,14 +21,21 @@ public final class Isostasy {
     public static final double SEDIMENT_MARINE_FACTOR = (3.3 - 2.4) / (3.3 - 1.03);
     /** Continental crust of this thickness stands at the datum. */
     public static final double DATUM_CRUST_KM = 33.0;
-    public static final double MAX_OCEAN_DEPTH_M = 6_000.0;
+    /** Depth that old ocean floor approaches on the plate-cooling curve, m. */
+    public static final double MAX_OCEAN_DEPTH_M = 5_651.0;
 
     private Isostasy() {
     }
 
-    /** Ocean floor deepens as it cools: 2.5 km at the ridge, plus 0.35 km x sqrt(age in Myr), down to ~6 km. */
+    /**
+     * Ocean floor deepens as it cools, on Earth's plate-cooling curve GDH1 (Stein and Stein 1992; D-43): 2.6 km
+     * at the ridge plus 0.365 km x sqrt(age in Myr) for the first 20 Myr, then flattening toward 5.65 km
+     * (5.5 km at 100 Myr). Old floor no longer deepens with age, so ocean basins do not swing sea level with
+     * the age of floor that is already old.
+     */
     public static double oceanDepthM(double ageMyr) {
-        return Math.min(MAX_OCEAN_DEPTH_M, 2_500.0 + 350.0 * Math.sqrt(Math.max(0.0, ageMyr)));
+        double t = Math.max(0.0, ageMyr);
+        return t < 20.0 ? 2_600.0 + 365.0 * Math.sqrt(t) : MAX_OCEAN_DEPTH_M - 2_473.0 * Math.exp(-0.0278 * t);
     }
 
     public static double elevationM(boolean continental, double thicknessKm, double oceanAgeMyr) {

@@ -158,8 +158,18 @@ Owner request (2026-10-16): "Refine the world model and parameters before furthe
   - The CLI can draw every map in each timeline frame (`--gif-panels`, with `--gif-delay` for the frame time): 13 maps, the global numbers and a chart of the history so far.
   - Cost at 31.25 km: plates 41 → 57 s; a world ~245–265 s (was ~241 s).
   - The CLI report gained: spin by plate size, RMS speed with and without spin, turn over the last 500 Myr, rounding holes and substeps, boundary types by local motion, coast orientation. Plate maps mark each spinning plate with a turning arrow.
+- **Steady land share (D-43, D-44).** Owner: "Land % is having too much variations", then: "Write a plan to steady land share the Earth way: measure how much each sea-level driver (ice, ocean-floor age, seafloor sediment) contributes to the swings, then propose how to damp them and raise continental freeboard." and "Approve the land share plan as written: build R1 and R2, run the R3 experiments, use the proposed targets, and you may download ETOPO 2022 after telling me the exact file and size." Built from the [land share stability plan](../reports/Land%20share%20stability%20plan.md) ([§ Outcome](../reports/Land%20share%20stability%20plan.md#outcome)).
+  - `geosim-cli --sea-drivers` writes `sea_drivers.csv`: per step, the part of sea level due to ice, ocean-floor age and seafloor sediment, the land share at fixed levels, and land, erosion and sediment by height band. Measurement only (byte-identical planet).
+  - R1: ocean floor on GDH1 (Stein & Stein 1992). R2: ice water counted at a sphere's area for its latitude. Together: sea-level SD 104 → 73 m, land SD 8.9 → 7.2 points (7 seeds at 78 km, last 500 Myr).
+  - R3: low continents were planed to a platform at sea level. Of four experiments, slope-squared stream power (n = 2, K = 250,000) fixed it; a stronger crust growth feedback, no delta top and 3× river transport changed little.
+  - Final, 12 seeds at 78 km, last 500 Myr: land SD 2.3 points, at most 8.0 within 50 Myr; 4.0 points per 100 m of sea level (Earth 4.8, from ETOPO 2022); mean land 580 m (Earth 656 m without ice sheets); land 31–37% at the end (mean 34.3%).
+  - Same steadiness at 31.25 km (4 seeds: SD 2.85 points, at most 8.5 within 50 Myr), with more land (36–40%).
+  - Not met: ~29% land, shallow sea 5–10% of the ocean (3.3%), mean land ≥ 600 m (580 m at 78 km, 483 m at 31.25 km). Land is now about the area of continental crust and more water barely moves it (2,730 m: 33.6%); Earth keeps ~30% of its continental crust under shallow sea on thinned margins, which the model lacks. Water stays at 2,640 m.
+  - Side effect: weaker weathering of slowly eroding lowlands leaves the Earth-like present ~2 °C warmer (17.1 °C, 650 ppm CO2).
+  - Same maps on 1, 4 and 16 threads at 78 km and on 1 and 8 at 31.25 km (seed 42); 55 tests.
 - **Known gaps** (not in this scope):
-  - Land is 33–43%, above Earth's 29%; continental interiors stand only 120–250 m above sea level, so flat platforms flood or drain with small sea-level changes. Freeboard (cratonic buoyancy, dynamic topography) is not modelled. (After D-41 and 2,660 m of water: 28–29% on average, 13–41% by seed.)
+  - Land is ~34%, above Earth's 29%, and shallow seas cover ~3% of the ocean (Earth 7.5%): continental margins are not thinned, so almost all continental crust stands above the sea (D-44). Before D-44, continental interiors stood only 120–250 m above sea level and land swung 13–41% by seed.
+  - The Earth-like present is ~2 °C warmer since D-44 (weathering follows erosion; `earthLandWeight` predates it).
   - No ocean currents or subtropical highs: no hyper-arid desert cores, so deserts cover 6–14% of land; ice covers 13–21%.
   - Ocean floor is still older than Earth's at 78 km (77–120 Myr); at 31.25 km it is close (61–69 Myr).
   - Sediment piles on oceanic crust at open margins (D-31 keeps them oceanic on purpose).

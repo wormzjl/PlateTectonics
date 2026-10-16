@@ -139,8 +139,13 @@ class PlateTectonicsTest {
     void isostasyMatchesReferenceValues() {
         assertEquals(0.0, Isostasy.elevationM(true, 33.0, 0.0), 1e-9);
         assertEquals(Isostasy.AIRY_FACTOR * 37_000.0, Isostasy.elevationM(true, 70.0, 0.0), 1e-6);
-        assertEquals(-2_500.0, Isostasy.elevationM(false, 7.0, 0.0), 1e-9);
-        assertEquals(-6_000.0, Isostasy.elevationM(false, 7.0, 100.0), 1e-9);
+        // ocean floor on GDH1 (Stein and Stein 1992): 2,600 + 365 sqrt(t) m while young, ~5.5 km at 100 Myr,
+        // flattening toward 5,651 m; the two branches meet at 20 Myr within half a metre
+        assertEquals(-2_600.0, Isostasy.elevationM(false, 7.0, 0.0), 1e-9);
+        assertEquals(-4_060.0, Isostasy.elevationM(false, 7.0, 16.0), 1e-9);
+        assertEquals(-5_498.0, Isostasy.elevationM(false, 7.0, 100.0), 1.0);
+        assertEquals(-Isostasy.MAX_OCEAN_DEPTH_M, Isostasy.elevationM(false, 7.0, 1_000.0), 1e-6);
+        assertEquals(Isostasy.oceanDepthM(20.0 - 1e-9), Isostasy.oceanDepthM(20.0), 0.5);
     }
 
     @Test

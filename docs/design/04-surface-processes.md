@@ -18,9 +18,9 @@
 
 ## Sea level
 
-- The ocean holds a fixed water volume: by default a mean depth of 2,640 m over the whole planet (CLI `--ocean-depth`, world setting `ocean_depth_m`), minus the water held in ice sheets. Earth's is about 2,620 m; the extra 20 m brings simulated planets to about 28–31% land on average (D-41, retuned for spinning plates in D-42). Their continents stand low and flat, so the land fraction still swings between ~13% and ~41% from seed to seed, with the ice and the ocean basins at the end ([Known gaps](#known-gaps)).
+- The ocean holds a fixed water volume: by default a mean depth of 2,640 m over the whole planet (CLI `--ocean-depth`, world setting `ocean_depth_m`), minus the water held in ice sheets. Earth's is about 2,620 m. Since D-44 continents stand above the sea, and land is about the area of continental crust: 12 seeds at 78 km end with 31–37% land (mean 34.3%; Earth 29%), and over the last 500 Myr land varies with an SD of 2.3 points. More water barely changes the mean (2,730 m: 33.6%), because over hundreds of Myr erosion grades the land to the new sea level ([Known gaps](#known-gaps)).
 - Sea level is the level at which the basins hold that volume (1 m histogram fill). It is recomputed twice per step: after the plates move, and after surface processes and ice ([02](02-simulation-pipeline.md#order-of-operations-in-one-step)).
-- Young (shallow) ocean floor and ice sheets therefore move sea level without extra rules. The layers that transgressions and regressions leave are not recorded until rock columns exist ([05](05-lithology.md)).
+- Young (shallow) ocean floor and ice sheets therefore move sea level without extra rules. Ocean floor deepens with age on Earth's GDH1 curve ([03](03-tectonics.md#isostasy-and-elevation)); ice counts at a sphere's area ([Glaciers](#glaciers); D-43). In the last 500 Myr (12 seeds at 78 km) sea level has an SD of 76 m and moves at most 181 m within 50 Myr (Earth: ~100–170 m in the Cretaceous): 0.83 of its variance comes from ocean-floor age and 0.13 from ice. `geosim-cli --sea-drivers` writes each part per step. The layers that transgressions and regressions leave are not recorded until rock columns exist ([05](05-lithology.md)).
 - In Minecraft the present-day level sits at y = 63 (D-19).
 
 ## Climate
@@ -52,7 +52,8 @@ Computed every step (`ClimateModel`) from the global state, elevation above sea 
 
 **Erosion** (outlets first; implicit, so any step length is stable; Braun & Willett 2013)
 
-- Rock erosion, m/Myr = K × erodibility × Q^m × S^n. Each cell is solved for its new height y above its already-updated receiver: y + c y^n = d. Closed forms for n = 1 and n = 2; Newton steps for other n.
+- Rock erosion, m/Myr = K × erodibility × Q^m × S^n, with m = 0.5 and **n = 2** (D-44). Each cell is solved for its new height y above its already-updated receiver: y + c y^n = d. Closed forms for n = 1 and n = 2; Newton steps for other n.
+- **Why n = 2:** erosion then falls with the square of the slope, so gentle lowlands near sea level erode slowly while steep land erodes faster. K is set so a 2% slope erodes as before (5,000 × 0.02 = 250,000 × 0.02²). With n = 1, low continents were planed to a flat platform at sea level; small sea-level changes flooded or drained it ([land share plan](../reports/Land%20share%20stability%20plan.md)). Channel steepness in real landscapes points to n > 1 in most places (Harel, Mudd & Attal 2016).
 - **Sub-grid relief term**: rock erosion += k × h² × wetness × erodibility, with h = km above sea level and wetness = runoff / 0.5 m (clamped 0.2–2). A 31 km cell cannot resolve the steep slopes that do most of the erosion in mountains; local relief, and with it erosion, grows with elevation (Ahnert 1970; Montgomery & Brandon 2002).
 - Erodibility: soft sediment (more than 10 m of cover) × 2; before land plants × 1.5, with plants but no forests × 1.15, with forests × 1; under ice × (1 + 2 × min(1, ice / 300 m)).
 - **Isostatic drop.** Removed rock lets the crust rebound, so the surface drops only by a share of the rock removed: 15% for crystalline crust, 27% for sediment on continental crust (40% for sediment on oceanic crust). Old ranges wear down over hundreds of Myr while young ones stay sharp. A cell never drops below its receiver, and lakes do not erode.
@@ -110,7 +111,7 @@ Built (v0):
 
 - Land ice where the summer temperature (annual mean + half the seasonal range) stays below 0 °C and precipitation is at least 30 mm/yr. During a snowball all land is iced.
 - Thickness follows a perfectly plastic profile, H = √(2 τ d / (ρ_ice g)) with τ = 100 kPa and d the distance from the ice margin, at most 4,000 m (≈3,300 m at 500 km from the margin).
-- The water equivalent (× 0.917) is taken out of the ocean before the second sea-level update of the step.
+- The water equivalent (× 0.917) is taken out of the ocean before the second sea-level update of the step. Each cell's ice counts at a sphere's area for its latitude, (π/2) × cos(latitude), which averages 1 over the map (D-43). The map's linear latitude (D-7) makes polar bands 2.5× a sphere's area: a third of the map lies poleward of 60°, against 13% of a sphere. Counted at map area, ice held 33–117 m of sea level and gave half of the sea-level swings; counted at sphere area it holds 14–50 m (Earth today ~65 m). The ice on the map is unchanged.
 - Under ice: erodibility up to × 3 (at 300 m or more of ice), regolith stripped where ice is over 100 m thick (e-folding 0.5 Myr), and `lastGlaciated` recorded per cell.
 
 Planned:
@@ -136,9 +137,9 @@ Arid cells with a sand supply (deltas, beaches, eroded sandstone) become dune fi
 
 | Constant | Value | Unit | Meaning |
 |---|---|---|---|
-| `streamPowerK` | 5,000 | m/Myr at Q = 1 km³/yr, S = 1 | Fluvial erodibility K of hard rock under forests: rock erosion = K Q^m S^n |
+| `streamPowerK` | 250,000 | m/Myr at Q = 1 km³/yr, S = 1 | Fluvial erodibility K of hard rock under forests: rock erosion = K Q^m S^n (as 5,000 with n = 1 at a 2% slope) |
 | `dischargeExponent` | 0.5 | — | m |
-| `slopeExponent` | 1 | — | n (1 and 2 in closed form, others by Newton steps) |
+| `slopeExponent` | 2 | — | n (1 and 2 in closed form, others by Newton steps; D-44) |
 | `reliefErosionK` | 20 | m/Myr per km² | Sub-grid relief erosion k h² × wetness (h in km above sea level) |
 | `transportK` | 3 × 10⁵ | km³/Myr per (km³/yr × slope) | River transport capacity K_t |
 | `softSedimentFactor` | 2 | × | Sediment and soft cover erode this much faster than crystalline rock |
@@ -188,7 +189,8 @@ Arid cells with a sand supply (deltas, beaches, eroded sandstone) become dune fi
 
 - **Ocean-floor sediment is too thick.** At 4.5 Gyr ~1.2–1.6 × 10⁹ km³ stands on the sea floor, roughly 2–3× an Earth-scaled estimate. The marine flux is Earth-like, but sediment stays ~120 Myr on the sea floor before a trench recycles it, against Earth's ~40 Myr.
 - **No ocean currents or subtropical highs**, so there are no hyper-arid desert cores or cold-coast deserts (Atacama, Namib). Land at 20–30° gets 330–390 mm/yr against Earth's ~600, yet deserts cover only 6–11% of land (Earth ~20%): cells there are dry rather than hyper-arid. Ice covers 13–21% of land (Earth ~10%). Forests and grasslands are near Earth's shares (78 km cells, 4 seeds).
-- **Continental interiors sit close to sea level** (median 120–240 m above sea level at 78 km; Earth's continents stand higher). Where they are flat, small sea-level changes flood or expose large areas, so the flooded share of continental crust varies from run to run (3–65% at 4.5 Gyr). With 2,660 m of water and plates that only drift (D-41), land averaged 29.1% over 12 seeds at 78 km and 27.9% over 8 at 31.25 km, but single seeds ranged from 13% to 41%: those that end with 100–230 m of ice leave their platforms dry. With spinning plates (D-42) the same 12 seeds average 25.2% at 2,660 m, 28.1% at 2,640 m (the default) and 32.8% at 2,620 m: 20 m of water moves the mean by ~4 points, and each seed's whole history changes with the water, so a 12-seed mean is good to about ±2–3 points. Freeboard (cratonic buoyancy, dynamic topography) and continental accommodation (rifted margins, thermal sag, flexure; [review](../reports/Marine%20spreading%20review.md) H1) are not modelled.
+- **Land is ~34%, above Earth's 29%, and shallow seas are scarce.** Since D-44 continents stand above the sea (mean land 580 m at 78 km, ~480 m at 31.25 km; Earth 656 m without ice sheets), and land is about the area of continental crust. Earth keeps ~30% of its continental crust under shallow sea, on thinned rifted margins and subsiding basins; the model does not thin continental margins, so water under 200 m covers ~3% of the ocean (Earth 7.5%), and adding water hardly helps ([plan](../reports/Land%20share%20stability%20plan.md#outcome); [review](../reports/Marine%20spreading%20review.md) H1). Before D-44, low flat continents sat at sea level and land swung between 13% and 41% by seed.
+- **Weathering follows erosion** (fresh rock weathers faster), so the slower lowland erosion of D-44 weakened weathering: the Earth-like present is ~2 °C warmer than before (12 seeds at 78 km: 17.1 °C, 650 ppm CO2, O2 1.37 PAL; was 15.7 °C, 480 ppm, 1.55). `earthLandWeight` was calibrated with the old erosion law.
 - **Marine spreading costs ~2× what it did before D-41** (31.25 km world ~230 s, was ~117 s): every mouth walks out to 3 fan lengths and deposits on every fan cell, on one thread. Spreading mouths whose reaches do not overlap at the same time would keep the result exact.
 - No hillslope diffusion or landslides beyond the tectonic slope relaxation of thick crust ([03](03-tectonics.md#plateaus-and-roots)).
 - Glaciers are v0: no ice flow, no orbital cycles, no moraines or loess.

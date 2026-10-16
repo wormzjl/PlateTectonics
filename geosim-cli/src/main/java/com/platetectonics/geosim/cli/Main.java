@@ -20,6 +20,7 @@ import com.platetectonics.geosim.planet.PlanetSimulation;
 import com.platetectonics.geosim.surface.SurfaceConfig;
 import com.platetectonics.geosim.surface.SurfaceProcesses;
 import com.platetectonics.geosim.tectonics.PlateSimulation;
+import com.platetectonics.geosim.tectonics.SeaLevelDrivers;
 import com.platetectonics.geosim.tectonics.TectonicsConfig;
 import com.platetectonics.geosim.terrain.SeaLevel;
 import com.platetectonics.geosim.world.MasterWorld;
@@ -55,6 +56,7 @@ public final class Main {
         int gifWidth = 720;
         int gifDelayMs = 80;
         boolean gifPanels = false;
+        boolean seaDrivers = false;
         double reportEvery = 250;
         boolean platesOnly = false;
         int threads = Runtime.getRuntime().availableProcessors();
@@ -76,6 +78,7 @@ public final class Main {
                 case "--gif-width" -> gifWidth = Integer.parseInt(args[++k]);
                 case "--gif-delay" -> gifDelayMs = Integer.parseInt(args[++k]);
                 case "--gif-panels" -> gifPanels = true;
+                case "--sea-drivers" -> seaDrivers = true;
                 case "--report-every" -> reportEvery = Double.parseDouble(args[++k]);
                 case "--plates-only" -> platesOnly = true;
                 case "--threads" -> threads = Integer.parseInt(args[++k]);
@@ -95,6 +98,8 @@ public final class Main {
                             + "--ocean-depth M --threads N [--master] [--block-view X,Z[,PIXELS[,BLOCKS_PER_PIXEL]] ...] --out DIR");
                     System.out.println("  --frame-every 0 skips the timeline GIF; --gif-delay MS sets its speed (80 ms per frame)");
                     System.out.println("  --gif-panels draws every map in each frame (--gif-width is then the width of one map)");
+                    System.out.println("  --sea-drivers writes sea_drivers.csv: each step, the part of sea level due to ice, ocean-floor age"
+                            + " and sediment, and the land share at fixed levels");
                     System.out.println("  --master writes master.ptw, the file a Minecraft world loads");
                     System.out.println("  --block-view renders the terrain as chunk generation builds it, centred on block X,Z");
                     System.out.println("  --threads defaults to all cores; every count gives the same planet");
@@ -151,7 +156,23 @@ public final class Main {
         double nextReport = 0;
         int steps = 0;
         boolean turnsMarked = false;
-        try (PrintWriter history = new PrintWriter(Files.newBufferedWriter(dir.resolve("history.csv")))) {
+        try (PrintWriter history = new PrintWriter(Files.newBufferedWriter(dir.resolve("history.csv")));
+             PrintWriter drivers = seaDrivers && !platesOnly
+                     ? new PrintWriter(Files.newBufferedWriter(dir.resolve("sea_drivers.csv"))) : null) {
+            if (drivers != null) {
+                StringBuilder head = new StringBuilder("time_myr,sea_level_m,ice_m,age_m,sediment_m,ice_water_m,ocean_fraction,"
+                        + "continental_fraction,mean_ocean_age_myr,mean_ocean_sediment_km,land_fraction,land_pts_per_100m,"
+                        + "median_continent_m,mean_land_m,map_ice_water_m,sea_level_old_depth_m,sea_level_map_ice_m,"
+                        + "sea_level_old_both_m,land_from_sea_fraction");
+                for (double top : BAND_TOPS_M) {
+                    head.append(String.format(Locale.ROOT, ",land_share_below_%.0f,erosion_below_%.0f,sediment_km_below_%.0f,"
+                            + "oceanic_share_below_%.0f", top, top, top, top));
+                }
+                for (double level : SeaLevelDrivers.LEVELS_M) {
+                    head.append(String.format(Locale.ROOT, ",land_above_%.0f", level));
+                }
+                drivers.println(head);
+            }
             history.println("time_myr,luminosity,mantle_tp_c,degassing,temp_c,pco2_ppm,o2_pal,organic_burial,"
                     + "methane_c,snowball,land_fraction,ice_fraction,land_weathering,erosion_m_per_myr,sea_level_m");
             System.out.println("    Myr plates cont%  land%  cm/yr  Gkm3  max m |  T(C)  O2(PAL)    CO2  ice%  E(m/Myr)");
@@ -181,6 +202,9 @@ public final class Main {
                 sim.step(Math.min(PlanetSimulation.eraStepMyr(now, age), age - now));
                 steps++;
                 logHistory(sim, history);
+                if (drivers != null) {
+                    logDrivers(sim, drivers);
+                }
                 if (panels != null) {
                     panels.record(sim);
                 }
@@ -346,6 +370,62 @@ public final class Main {
         System.out.printf(Locale.ROOT, " | %5.1f %8s %6.0f %5.1f %9.1f%s%n", g.globalTempC(), oxygen(g.oxygenPal()),
                 g.pCO2ppm(), 100 * sim.climate().iceFraction, sim.surface().meanLandErosionMPerMyr(),
                 g.snowball() ? "  snowball" : "");
+    }
+
+    /** Upper edges of the land height bands in sea_drivers.csv, m above sea level (the last band is open). */
+    private static final double[] BAND_TOPS_M = {50, 200, 500, 1_000, 1e9};
+
+    /** One row of sea_drivers.csv (measurement only; see {@link SeaLevelDrivers}). */
+    private static void logDrivers(PlanetSimulation sim, PrintWriter w) {
+        // the ice's water counted at the map's own area (before D-43), to compare with the sphere-weighted budget
+        float[] iceM = sim.climate().iceM;
+        double mapIce = 0.0;
+        for (float v : iceM) {
+            mapIce += v * 0.917;
+        }
+        mapIce /= iceM.length;
+        SeaLevelDrivers.Sample d = SeaLevelDrivers.measure(sim.plates(), mapIce);
+        StringBuilder row = new StringBuilder(String.format(Locale.ROOT,
+                "%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.4f,%.4f,%.1f,%.3f,%.4f,%.2f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f", sim.timeMyr(),
+                d.seaLevelM(), d.iceM(), d.ageM(), d.sedimentM(), d.iceWaterM(), d.oceanFraction(),
+                d.continentalFraction(), d.meanOceanAgeMyr(), d.meanOceanSedimentKm(), d.landFraction(), d.landPer100M(),
+                d.medianContinentM(), d.meanLandM(), mapIce, d.oldDepthLevelM(), d.otherIceLevelM(), d.bothLevelM()));
+        row.append(String.format(Locale.ROOT, ",%.4f", (double) sim.surface().landFromSeaCells() / iceM.length));
+        // land by height above the sea: share of the land and mean erosion in each band
+        float[] above = sim.elevationAboveSeaM();
+        float[] erosion = sim.surface().erosionMPerMyr;
+        int bands = BAND_TOPS_M.length;
+        long[] count = new long[bands];
+        double[] sum = new double[bands];
+        double[] sediment = new double[bands];
+        long[] oceanic = new long[bands];
+        var lith = sim.plates().lithosphere();
+        long land = 0;
+        for (int idx = 0; idx < above.length; idx++) {
+            if (above[idx] <= 0f) {
+                continue;
+            }
+            land++;
+            int b = 0;
+            while (b < bands - 1 && above[idx] > BAND_TOPS_M[b]) {
+                b++;
+            }
+            count[b]++;
+            sum[b] += erosion[idx];
+            sediment[b] += lith.sedimentKm(idx);
+            if (!lith.isContinental(idx)) {
+                oceanic[b]++;
+            }
+        }
+        for (int b = 0; b < bands; b++) {
+            row.append(String.format(Locale.ROOT, ",%.4f,%.2f,%.3f,%.4f", land == 0 ? 0.0 : (double) count[b] / land,
+                    count[b] == 0 ? 0.0 : sum[b] / count[b], count[b] == 0 ? 0.0 : sediment[b] / count[b],
+                    count[b] == 0 ? 0.0 : (double) oceanic[b] / count[b]));
+        }
+        for (double f : d.landAtLevel()) {
+            row.append(String.format(Locale.ROOT, ",%.4f", f));
+        }
+        w.println(row);
     }
 
     private static void logHistory(PlanetSimulation sim, PrintWriter w) {

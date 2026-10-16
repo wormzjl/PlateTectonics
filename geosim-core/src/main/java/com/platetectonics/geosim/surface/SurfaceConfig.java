@@ -5,9 +5,12 @@ package com.platetectonics.geosim.surface;
  * Myr; discharge in km3/yr.
  *
  * @param streamPowerK                 fluvial erodibility: rock erosion in m/Myr = K Q^m S^n (Q in km3/yr), for
- *                                     hard rock under forests
+ *                                     hard rock under forests; with n = 2 it erodes as K = 5,000 with n = 1 would at
+ *                                     a 2% slope (D-44)
  * @param dischargeExponent            m
- * @param slopeExponent                n (1 or 2 are solved in closed form, other values by Newton steps)
+ * @param slopeExponent                n (1 or 2 are solved in closed form, other values by Newton steps); 2, so
+ *                                     gentle lowlands erode slowly and keep their height above the sea (Harel et
+ *                                     al. 2016; D-44)
  * @param reliefErosionK               sub-grid hillslope erosion: rock m/Myr = k h^2 (h = km above sea level) x
  *                                     wetness; the grid cannot resolve the steep slopes that do most of the work
  *                                     in mountains (Ahnert 1970; Montgomery &amp; Brandon 2002)
@@ -95,9 +98,9 @@ public record SurfaceConfig(
 
     public static SurfaceConfig defaults() {
         return new SurfaceConfig(
-                5_000.0,  // streamPowerK
+                250_000.0, // streamPowerK
                 0.5,      // dischargeExponent
-                1.0,      // slopeExponent
+                2.0,      // slopeExponent
                 20.0,     // reliefErosionK
                 3.0e5,    // transportK
                 2.0,      // softSedimentFactor

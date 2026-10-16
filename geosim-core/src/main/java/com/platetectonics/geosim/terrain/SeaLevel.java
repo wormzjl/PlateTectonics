@@ -11,10 +11,10 @@ public final class SeaLevel {
     public static final double EARTH_MEAN_OCEAN_DEPTH_M = 2_620.0;
     /**
      * Ocean water of a simulated planet unless set otherwise: Earth's plus 20 m (D-41, retuned with plate
-     * rotation in D-42). Simulated continents stand low and flat, so a little water floods a lot of them: over
-     * 12 seeds at 78 km cells with spinning plates, 2,620 m gives 32.8% land on average, 2,640 m 28.1% and
-     * 2,660 m 25.2% (Earth 29%), though single seeds range from about 16% to 40%. With eclogite capped at its
-     * crust (a later bug fix) 2,640 m gives 31.2%, within the seed noise of ~2 points.
+     * rotation in D-42). Since slope-squared erosion (D-44) continents stand above the sea and land is about
+     * the area of continental crust: over 12 seeds at 78 km cells, 2,640 m gives 34.3% land (31-37% by seed;
+     * Earth 29%) and 2,730 m 33.6%, because erosion grades the land to whatever level the sea stands at. The
+     * water was therefore left at 2,640 m.
      */
     public static final double DEFAULT_OCEAN_DEPTH_M = 2_640.0;
     /** Histogram bin for the fast fill, m. */
