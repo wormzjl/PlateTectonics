@@ -14,8 +14,12 @@ import java.util.Arrays;
  * <p>
  * Cells come out a whole ring at a time, with the queue in local variables: walks on several threads then
  * share no field that changes per cell. The queue holds (row, column) pairs, so no cell index is divided.
- * Visited cells are remembered either in a window around the mouth (small and cache-friendly; the walk must
- * then stay within {@code radius − 2} rings) or over the whole grid.
+ * Visited cells are remembered either in a window around the mouth (small and cache-friendly) or over the
+ * whole grid. A cell of ring r lies less than r + 1 cells from the mouth and its neighbours at most r + 1,
+ * so a window walk may take rings up to {@code radius − 1}; it throws rather than go further.
+ * <p>
+ * Grids up to 32,768 cells on a side: on an Earth-sized cylinder, cells down to ~1.2 km. Marine spreading
+ * always builds one whole-grid walker, so this bounds the master grid on any thread count.
  */
 final class SeaWalk {
     private final int w;
@@ -24,7 +28,8 @@ final class SeaWalk {
     /** Half-width of the visited window, cells; −1: the whole grid. */
     private final int radius;
     private final int side;
-    private final int[] seen;
+    /** Visited marks: the walk's stamp, 1..255 (one byte: a window's marks fit the L1 cache). */
+    private final byte[] seen;
     private int stamp;
     /** Queued cells as {@code row << 16 | column}: this ring and the next. */
     private int[] now;
@@ -50,7 +55,7 @@ final class SeaWalk {
         this.radius = radius;
         this.side = 2 * radius + 1;
         int cells = radius < 0 ? width * height : side * side;
-        seen = new int[cells];
+        seen = new byte[cells];
         // one spare slot: every neighbour is written to both queues before the counts decide
         now = new int[cells + 1];
         next = new int[cells + 1];
@@ -62,8 +67,8 @@ final class SeaWalk {
     }
 
     void start(int mouth) {
-        if (++stamp == Integer.MAX_VALUE) {
-            Arrays.fill(seen, 0);
+        if (++stamp == 256) {
+            Arrays.fill(seen, (byte) 0);
             stamp = 1;
         }
         mi = mouth % w;
@@ -72,7 +77,7 @@ final class SeaWalk {
         head = 0;
         tail = 0;
         nextTail = 0;
-        seen[radius < 0 ? mouth : radius * side + radius] = stamp;
+        seen[radius < 0 ? mouth : radius * side + radius] = (byte) stamp;
         now[tail++] = mj << 16 | mi;
     }
 
@@ -87,8 +92,8 @@ final class SeaWalk {
         if (radius >= 0) {
             throw new IllegalStateException("only a whole-grid walk can carry on another walk");
         }
-        if (++stamp == Integer.MAX_VALUE) {
-            Arrays.fill(seen, 0);
+        if (++stamp == 256) {
+            Arrays.fill(seen, (byte) 0);
             stamp = 1;
         }
         mi = mouth % w;
@@ -96,13 +101,14 @@ final class SeaWalk {
         this.ring = ring;
         head = 0;
         tail = 0;
+        byte mark = (byte) stamp;
         for (int q = takenFrom; q < takenTo; q++) {
-            seen[taken[q]] = stamp;
+            seen[taken[q]] = mark;
         }
         nextTail = 0;
         for (int q = queuedFrom; q < queuedTo; q++) {
             int p = queued[q];
-            seen[(p >>> 16) * w + (p & 0xFFFF)] = stamp;
+            seen[(p >>> 16) * w + (p & 0xFFFF)] = mark;
             next[nextTail++] = p;
         }
     }
@@ -142,14 +148,17 @@ final class SeaWalk {
             nextTail = 0;
             ring++;
         }
+        if (radius >= 0 && ring >= radius) {
+            throw new IllegalStateException("ring " + ring + " leaves the visited window of half-width " + radius);
+        }
         int[] now = this.now;
         int[] next = this.next;
-        int[] seen = this.seen;
+        byte[] seen = this.seen;
         boolean[] sea = this.sea;
         int head = this.head;
         int tail = this.tail;
         int nextTail = this.nextTail;
-        int stamp = this.stamp;
+        byte stamp = (byte) this.stamp;
         int w = this.w;
         int half = w / 2;
         int mi = this.mi;
@@ -233,12 +242,24 @@ final class SeaWalk {
         Arrays.fill(out.rings, start, len, ring);
     }
 
-    /** Cells taken from walks, in order, each with its ring and squared distance from the mouth (cells). */
+    /**
+     * Cells taken from walks, in order, each with its ring and squared distance from the mouth (cells). The
+     * distances are never negative, so a user may flag a cell by storing {@code ~dist2}.
+     */
     static final class Cells {
         int[] cells = new int[1 << 12];
         int[] rings = new int[1 << 12];
         int[] dist2 = new int[1 << 12];
         int len;
+
+        /** Lets go of a buffer grown past {@code max} cells; only while empty. */
+        void shrink(int max) {
+            if (cells.length > max) {
+                cells = new int[1 << 12];
+                rings = new int[1 << 12];
+                dist2 = new int[1 << 12];
+            }
+        }
 
         /** Room for at least {@code size} cells, keeping the first {@link #len}. */
         void reserve(int size) {

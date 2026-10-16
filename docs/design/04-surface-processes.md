@@ -78,11 +78,13 @@ Before D-40, steps 2 and 4 put the surplus on as few cells as they found, often 
 
 **Walks made ahead (same result on any thread count).** The cells a mouth takes, and their order, depend only on which cells are sea; what earlier mouths deposited only decides where the walk stops. So the walks are made ahead on the worker threads while the spreading itself stays in cell order on one thread:
 
-1. Mouths go in batches of 8,192. Each batch is cut into bands of columns, four per worker thread.
+1. Mouths go in batches of up to 8,192, sized so that a batch records about 8 million cells. Each batch is cut into bands of columns, four per worker thread.
 2. A worker takes a band and spreads its mouths in order, exactly as above but on its own copy of the sea floor, and records the walk: every ring it took, one ring more, and the cells it had queued for the next ring.
 3. The calling thread spreads each mouth for real along its recorded walk. Where a mouth in another band changed the sea floor so the walk must go further (~2% of mouths at 78 km, ~4% at 31.25 km), it carries the walk on from the recorded queue.
 
-Recorded walks stay inside a window of 3 apron radii plus 3 cells around the mouth, so a worker's visited marks fit in cache.
+Spreading only adds sediment, so a cell already at shelf depth (or at the delta top) when a batch begins stays there until the batch ends. Workers flag such cells in the record, and the spreading skips them without reading their elevation; at 31.25 km that is 87% of the cells searched. A batch records at most 16.7 million cells (~200 MB). Past that, a worker records only the mouth, and the calling thread walks it.
+
+Recorded walks stay inside a window of 3 apron radii plus 3 cells around the mouth. A cell of ring r lies less than r + 1 cells from the mouth, so a window of half-width R holds rings up to R − 1. The visited marks take one byte per cell, so a worker's marks fit in its L1 cache.
 
 **Settling in place:**
 

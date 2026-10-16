@@ -47,8 +47,10 @@ public final class PlateSimulation {
     final int[] dist;
     // basin closure scratch (BasinClosure)
     final int[] closureOrder;
+    /** All false between uses. */
     final boolean[] closureSeen;
     final float[] closureFill;
+    final BasinClosure.Runs closureRuns = new BasinClosure.Runs();
     final float[] ceilingScratch;
     /** Elevation each cell may reach in crustal flow, m on the datum (scratch). */
     final float[] ceilingElevationScratch;
@@ -419,35 +421,44 @@ public final class PlateSimulation {
         int count = plates.size();
         double[] sumCos = new double[count];
         double[] sumSin = new double[count];
-        double[] sumJ = new double[count];
-        for (Plate p : plates) {
-            p.area = 0;
-            p.continentalArea = 0;
-            p.maxOceanAge = 0f;
-        }
+        // row sums are whole numbers far below 2^53, exact in any order
+        long[] sumJ = new long[count];
+        int[] area = new int[count];
+        int[] continental = new int[count];
+        float[] maxAge = new float[count];
         int w = grid.width();
-        for (int idx = 0; idx < grid.size(); idx++) {
-            int o = lith.owner[idx];
-            Plate p = plates.get(o);
-            p.area++;
-            int i = idx % w;
-            sumCos[o] += columnCos[i];
-            sumSin[o] += columnSin[i];
-            sumJ[o] += idx / w;
-            if (lith.type[idx] == Lithosphere.CONTINENTAL) {
-                p.continentalArea++;
-            } else if (lith.oceanAge[idx] > p.maxOceanAge) {
-                p.maxOceanAge = lith.oceanAge[idx];
+        int h = grid.height();
+        int[] owner = lith.owner;
+        byte[] type = lith.type;
+        float[] age = lith.oceanAge;
+        double[] cos = columnCos;
+        double[] sin = columnSin;
+        // the sines and cosines add up per plate in cell order, as they always have
+        for (int j = 0, idx = 0; j < h; j++) {
+            for (int i = 0; i < w; i++, idx++) {
+                int o = owner[idx];
+                area[o]++;
+                sumCos[o] += cos[i];
+                sumSin[o] += sin[i];
+                sumJ[o] += j;
+                if (type[idx] == Lithosphere.CONTINENTAL) {
+                    continental[o]++;
+                } else if (age[idx] > maxAge[o]) {
+                    maxAge[o] = age[idx];
+                }
             }
         }
         for (Plate p : plates) {
+            p.area = area[p.id];
+            p.continentalArea = continental[p.id];
+            p.maxOceanAge = maxAge[p.id];
             if (p.area == 0) {
                 p.alive = false;
                 continue;
             }
             double ci = Math.atan2(sumSin[p.id], sumCos[p.id]) * w / (2.0 * Math.PI);
             p.centroidI = ci < 0 ? ci + w : ci;
-            p.centroidJ = sumJ[p.id] / p.area;
+            p.centroidJ = (double) sumJ[p.id] / p.area;
         }
     }
 

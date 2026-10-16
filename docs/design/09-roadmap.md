@@ -55,12 +55,15 @@
   | 31.25 km | 16 | **138** | **1.5 min** | 39 / 6 / 43 s |
   | 31.25 km | 16 (world-model refinement, round fans) | 258 | 2.8 min | 51 / 7 / 107 s |
   | 31.25 km | 16 (round fans, walks made ahead) | **235** | **2.5 min** | 55 / 8 / 87 s |
+  | 31.25 km | 16 (exact speedups after the review; before, same day: 188–197) | **175–179** | **1.9 min** | 38 / 6 / 68–69 s |
   | 78 km | 1 | 24.4 (before: 26.9) | 16 s | 6.4 / 2.2 / 6.8 s |
   | 78 km | 8 | 16.7 (before: 20.5) | 11 s | 4.2 / 1.1 / 5.2 s |
   | 78 km | 16 | 15.9 (before: 19.7) | 10 s | 4.1 / 1.1 / 4.9 s |
   | 78 km | 16 (world-model refinement, round fans) | 23.6–23.9 | 15 s | 5.4 / 1.5 / 8.0 s |
   | 78 km | 16 (round fans, walks made ahead) | 21.2–21.4 | 14 s | 5.2 / 1.5 / 6.7 s |
   | 78 km | 1 (round fans; no walks ahead on one thread) | 39.5 (before: 39.3) | 25 s | 10.2 / 4.6 / 10.3 s |
+  | 78 km | 16 (exact speedups after the review) | 16.9–17.1 (before: 19.7) | 11 s | 3.9 / 1.5 / 5.4 s |
+  | 78 km | 1 (exact speedups after the review) | 35.3 (before: 36.8) | 23 s | 9.0 / 4.4 / 9.1 s |
 
   Every thread count writes byte-identical maps, history and events (D-5; `PlanetSimulationTest` checks 1 vs 5 threads). Per-cell loops run in parallel: the plate move copy (the largest cost, memory-bound), ocean ageing, elevations and sea level, temperature, the moisture sweeps (by row) and mixing, sea-floor sediment, weathering and the routing setup. What stays on one thread follows drainage order or shares material between cells.
 - **Faster spreading and routing (same results):** marine spreading (~27% of the main thread) and Priority-Flood routing (~23%) were the sequential bottleneck. Both still visit cells in exactly the same order, so every output stays byte-identical, but each cell costs less:
@@ -122,12 +125,23 @@ Owner request (2026-10-16): "Refine the world model and parameters before furthe
   | 31.25 km | 1 | 46% | 43% | 8% | 246 m | 61 Myr | 14 / 35 / 21 | 1,820 Myr |
 
   Earth: ~40% continental crust, 29% land, desert ~20 / forest ~31 / ice ~10% of land, ocean floor ~64 Myr, GOE ~2,100 Myr after formation. Cells more than 800 m above all eight neighbours fell from 463 to 81 at 78 km; those left are sediment wedges at trenches, forearc highs and thick crust at orogen edges. The thickest sediment is 27–54 km (it was 1,200+ km). Delta-plain dumping fell from 9 to 0.7–1.2 × 10⁹ km³.
-- **Cost.** A 31.25 km world takes ~2.5 min (plates 51–55 s, climate 7–8 s, surface 87 s; it was 1.5 min before this refinement). Most of the increase is marine spreading: round fans search ~1.4× the cells of the old diamonds, and each visit costs more. Basin closure adds ~12 s to the plates.
+- **Cost.** A 31.25 km world took ~2.5 min on a busy machine (plates 51–55 s, climate 7–8 s, surface 87 s; it was 1.5 min before this refinement), and ~1.9 min after the exact speedups below. Most of the increase is marine spreading: round fans search ~1.4× the cells of the old diamonds, and each visit costs more. Basin closure adds ~12 s to the plates.
 - **Faster round spreading (same results).** Owner request: speed up round marine spreading without changing what it builds. Every thread count still writes byte-identical maps, history and events (checked at 78 km on 1, 2 and 16 threads and at 31.25 km on 16).
   - How: walks made ahead on the workers, replayed in cell order ([04 § Sea floor](04-surface-processes.md#sea-floor), D-40).
   - Marine spreading per world, 16 threads: 78 km 3.7 → 2.1 s; 31.25 km 69 → 46 s (17 s walking ahead on the workers, 29 s replay on the calling thread). Surface step: 8.0 → 6.7 s and 107 → 87 s. One thread does not walk ahead and is ~5% slower in the surface step (each ring is copied before it is used).
   - What limits it: the replay reads each cell's elevation once (memory-bound), and the 4% of walks that stop short are carried on by one thread (~0.8 × 10⁹ cells at 31.25 km). Breadth-first spreading took 1.35 s at 78 km, so round fans still cost more.
   - Tried and dropped: walking ahead while the replay runs (the replay slowed by 40% sharing cores with the workers, net slower); walks ahead from the sea floor at the batch start, without the worker's own deposits (about twice as many short walks); bands of mouth index instead of columns (neighbours one row up sit dozens of mouths earlier); remembering last step's reach per mouth (8% fewer short walks, no faster).
+- **Exact speedups after the review (same results).** Owner request: carry out the exact items of the [marine spreading review](../reports/Marine%20spreading%20review.md#status-after-the-exact-speedups), plates side included. Maps, history and events stay byte-identical on 1, 2 and 16 threads at 78 km and on 16 at 31.25 km; 47 tests. A JFR profile and counts of the marine work chose what to do.
+  - Plates: plate statistics without list lookups (P2); crustal-flow ceilings, eclogite and keel updates and rift sides on the worker threads; the last subduction pair remembered; basin closure finds ocean regions as runs along rows joined by union-find, and floods only the enclosed ones (P10; [03](03-tectonics.md#boundary-processes)).
+  - Surface: no `pow` call for slope exponent 1 (P1). Water bodies (D-39) are found as runs too. Walk records flag cells already at shelf or delta-top level, batches are sized by what they record (at most ~200 MB), and visited marks take one byte per cell ([04 § Sea floor](04-surface-processes.md#sea-floor)).
+  - Code-review fixes: a cap on the cells recorded per batch (C1), a window guard in the sea walk (C2), the grid-size limit documented (C3), and tests for carried-on walks, capped records, whole-grid walks, odd widths and one- or two-row grids (C5).
+  - Time, alternating runs on 16 threads at 31.25 km: 121–126 s → 112–114 s (plates 44 → 38 s, surface 70–75 → 68–69 s). At 78 km: 12.6 → 10.9 s; one thread 23.6 → 22.6 s. The machine was shared, and a single 31.25 km run varies by up to ±8 s.
+  - Measured and dropped:
+    - Skipping the apron search where nothing in reach is deep (P4): 1.9% of mouths.
+    - Skipping walks across full seas (P5): 0.8% of mouths, 2% of cells.
+    - Spare rings recorded past each walk (P6): 20–27% fewer carried-on walks, but the long ones remain; no faster.
+    - Skipping the first sea-level update of a step (P3): ~1 s, and it needs a proof about the elevation cap.
+  - What limits marine spreading now (~44 s at 31.25 km: 15 s ahead on the workers, 29 s replay): the replay's serial pass over ~4.4 × 10⁹ recorded cells, and ~0.8 × 10⁹ cells of walks carried on by one thread. The flags skip 87% of the elevation reads but save only ~1.7 s. The next exact step is to replay only the cells with room (estimated −10 s), best done after the [marine science changes](../reports/Marine%20science%20plan.md).
 - **Known gaps** (not in this scope):
   - Land is 33–43%, above Earth's 29%; continental interiors stand only 120–250 m above sea level, so flat platforms flood or drain with small sea-level changes. Freeboard (cratonic buoyancy, dynamic topography) is not modelled.
   - No ocean currents or subtropical highs: no hyper-arid desert cores, so deserts cover 6–14% of land; ice covers 13–21%.

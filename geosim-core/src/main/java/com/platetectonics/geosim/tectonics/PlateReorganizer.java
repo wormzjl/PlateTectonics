@@ -175,22 +175,30 @@ final class PlateReorganizer {
         PeriodicNoise wiggle = new PeriodicNoise(sim.seed, noiseStream, periodX, 4, 0.5);
         double amplitude = 900.0 / sim.grid.cellKm();
         boolean[] side = new boolean[n];
+        int id = plate.id;
+        // each cell's side from its own position only
+        sim.parallel.cells(n, (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                if (L.owner[idx] != id) {
+                    continue;
+                }
+                int i = idx % w;
+                int j = idx / w;
+                double dx = sim.wrapDelta(i - ci);
+                double dy = j - cj;
+                double s = dx * nx + dy * ny + amplitude * wiggle.sample(i * lattice, j * lattice);
+                side[idx] = s > 0;
+            }
+        });
         int countA = 0;
         int countB = 0;
         for (int idx = 0; idx < n; idx++) {
-            if (L.owner[idx] != plate.id) {
-                continue;
-            }
-            int i = idx % w;
-            int j = idx / w;
-            double dx = sim.wrapDelta(i - ci);
-            double dy = j - cj;
-            double s = dx * nx + dy * ny + amplitude * wiggle.sample(i * lattice, j * lattice);
-            side[idx] = s > 0;
-            if (side[idx]) {
-                countB++;
-            } else {
-                countA++;
+            if (L.owner[idx] == id) {
+                if (side[idx]) {
+                    countB++;
+                } else {
+                    countA++;
+                }
             }
         }
         int minCells = minPlateCells(sim);

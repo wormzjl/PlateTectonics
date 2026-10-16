@@ -45,6 +45,16 @@ public final class FlowRouting {
     private float[] elevation;
     private float seaLevel;
     private Parallel parallel = Parallel.SERIAL;
+    /**
+     * Water bodies as runs of ocean cells along rows (none crosses the date line), joined into bodies by
+     * union-find: first run of each row ({@code rowStart[h]} runs in all), first cell and length of each run,
+     * parent run, and per body (indexed by its root run) its cells.
+     */
+    private final int[] rowStart;
+    private int[] runBegin = new int[0];
+    private int[] runLength = new int[0];
+    private int[] runParent = new int[0];
+    private int[] bodySize = new int[0];
 
     public FlowRouting(CylinderGrid grid) {
         this.grid = grid;
@@ -58,6 +68,7 @@ public final class FlowRouting {
         coast = new boolean[n];
         pit = new int[n];
         heap = new long[n];
+        rowStart = new int[grid.height() + 1];
         for (int k = 0; k < 8; k++) {
             offset[k] = DJ[k] * grid.width() + DI[k];
         }
@@ -179,69 +190,145 @@ public final class FlowRouting {
      */
     private void dropSmallSeas(int n, int w, int h) {
         int minCells = (int) Math.ceil(MIN_SEA_KM2 / grid.cellAreaKm2());
-        boolean[] seen = coast; // scratch: the coast is worked out afterwards
-        java.util.Arrays.fill(seen, false);
-        int[] queue = pit; // scratch: the flood below starts with an empty pit queue
+        int runs = labelWater(w, h);
+        int[] begin = runBegin;
+        int[] length = runLength;
+        int[] size = bodySize;
+        java.util.Arrays.fill(size, 0, runs, 0);
+        for (int k = 0; k < runs; k++) {
+            size[findRun(k)] += length[k];
+        }
+        // bodies in the order of their first cell: a body's first run is its root (unions keep the lower run)
         int largest = -1;
         int largestSize = 0;
         boolean kept = false;
-        for (int start = 0; start < n; start++) {
-            if (!ocean[start] || seen[start]) {
+        for (int k = 0; k < runs; k++) {
+            if (findRun(k) != k) {
                 continue;
             }
-            int tail = floodWater(start, queue, seen, w, h);
-            if (tail >= minCells) {
+            if (size[k] >= minCells) {
                 kept = true;
-                continue;
-            }
-            if (tail > largestSize) {
-                largestSize = tail;
-                largest = start;
-            }
-            for (int k = 0; k < tail; k++) {
-                ocean[queue[k]] = false;
-                visited[queue[k]] = false;
+            } else if (size[k] > largestSize) {
+                largestSize = size[k];
+                largest = k;
             }
         }
-        if (!kept && largest >= 0) {
-            // flood the largest body again from its first cell; it alone stays ocean
-            for (int idx = 0; idx < n; idx++) {
-                ocean[idx] = elevation[idx] <= seaLevel;
-                seen[idx] = false;
-            }
-            floodWater(largest, queue, seen, w, h);
-            for (int idx = 0; idx < n; idx++) {
-                ocean[idx] = seen[idx];
-                visited[idx] = seen[idx];
+        // if no water body is large enough, the largest stays ocean
+        for (int k = 0; k < runs; k++) {
+            int root = findRun(k);
+            if (kept ? size[root] < minCells : root != largest) {
+                for (int idx = begin[k], e = begin[k] + length[k]; idx < e; idx++) {
+                    ocean[idx] = false;
+                    visited[idx] = false;
+                }
             }
         }
     }
 
-    /** Collects the water cells edge-connected to {@code start} into {@code queue}; returns how many. */
-    private int floodWater(int start, int[] queue, boolean[] seen, int w, int h) {
-        int head = 0;
-        int tail = 0;
-        queue[tail++] = start;
-        seen[start] = true;
-        while (head < tail) {
-            int c = queue[head++];
-            int cj = c / w;
-            int ci = c - cj * w;
-            for (int k = 0; k < 4; k++) {
-                int nj = cj + DJ[k];
-                if (nj < 0 || nj >= h) {
-                    continue;
+    /**
+     * Cuts the ocean into runs along rows (on the worker threads) and joins edge-neighbouring runs, across
+     * the date line too, into water bodies; returns the number of runs.
+     */
+    private int labelWater(int w, int h) {
+        boolean[] ocean = this.ocean;
+        int[] rows = rowStart;
+        parallel.rows(h, (from, to) -> {
+            for (int j = from; j < to; j++) {
+                int count = 0;
+                int row = j * w;
+                for (int i = 0; i < w; i++) {
+                    if (ocean[row + i] && (i == 0 || !ocean[row + i - 1])) {
+                        count++;
+                    }
                 }
-                int ni = ci + DI[k];
-                ni = ni < 0 ? ni + w : ni >= w ? ni - w : ni;
-                int nb = nj * w + ni;
-                if (ocean[nb] && !seen[nb]) {
-                    seen[nb] = true;
-                    queue[tail++] = nb;
+                rows[j + 1] = count;
+            }
+        });
+        rows[0] = 0;
+        for (int j = 0; j < h; j++) {
+            rows[j + 1] += rows[j];
+        }
+        int runs = rows[h];
+        if (runBegin.length < runs) {
+            int cap = Math.max(runs, runBegin.length + runBegin.length / 2);
+            runBegin = new int[cap];
+            runLength = new int[cap];
+            runParent = new int[cap];
+            bodySize = new int[cap];
+        }
+        int[] begin = runBegin;
+        int[] length = runLength;
+        int[] parent = runParent;
+        parallel.rows(h, (from, to) -> {
+            for (int j = from; j < to; j++) {
+                int k = rows[j];
+                int row = j * w;
+                int i = 0;
+                while (i < w) {
+                    if (!ocean[row + i]) {
+                        i++;
+                        continue;
+                    }
+                    int b = i;
+                    while (i < w && ocean[row + i]) {
+                        i++;
+                    }
+                    begin[k] = row + b;
+                    length[k] = i - b;
+                    parent[k] = k;
+                    k++;
+                }
+            }
+        });
+        for (int j = 0; j < h; j++) {
+            int a = rows[j];
+            int z = rows[j + 1];
+            // across the date line
+            if (z - a > 1 && begin[a] == j * w && begin[z - 1] + length[z - 1] == (j + 1) * w) {
+                unionRuns(a, z - 1);
+            }
+            if (j == 0) {
+                continue;
+            }
+            // with the row above: runs that share a column
+            int p = rows[j - 1];
+            int q = a;
+            while (p < a && q < z) {
+                int pb = begin[p] - (j - 1) * w;
+                int pe = pb + length[p];
+                int qb = begin[q] - j * w;
+                int qe = qb + length[q];
+                if (pb < qe && qb < pe) {
+                    unionRuns(p, q);
+                }
+                if (pe <= qe) {
+                    p++;
+                } else {
+                    q++;
                 }
             }
         }
-        return tail;
+        return runs;
+    }
+
+    private int findRun(int k) {
+        int[] p = runParent;
+        while (p[k] != k) {
+            p[k] = p[p[k]];
+            k = p[k];
+        }
+        return k;
+    }
+
+    /** Joins two runs' bodies under the lower root, so a body's root is its first run. */
+    private void unionRuns(int a, int b) {
+        int ra = findRun(a);
+        int rb = findRun(b);
+        if (ra < rb) {
+            runParent[rb] = ra;
+        } else if (rb < ra) {
+            runParent[ra] = rb;
+        }
     }
 
     /** Number of land cells in {@link #order}. */

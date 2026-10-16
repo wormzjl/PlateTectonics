@@ -1,6 +1,6 @@
 # Marine spreading review (2026-10-16)
 
-Three independent reviews of the walk-ahead marine spreading (D-40) and the marine sediment model, consolidated and checked against the code. Nothing here is implemented yet.
+Three independent reviews of the walk-ahead marine spreading (D-40) and the marine sediment model, consolidated and checked against the code. The exact items were carried out or measured the same day; see [Status](#status-after-the-exact-speedups). The science items are planned in [Marine science plan](Marine%20science%20plan.md).
 
 ## L0 — Summary
 
@@ -68,6 +68,31 @@ Allowed to change outputs (documented, deterministic):
 - **Routing:** an explicit tie-break enables a radix heap (13 → ~5 s); `Math.sqrt` for pow(q, 0.5); fixed-partition parallel reductions for sea-level bins and stats sums.
 
 Suggested order: P1–P3 and the marine counters first (low risk), then P4–P7, then P8–P11. Exact total: ~150 → ~95–110 s. With I1 and radix routing: ~70–80 s.
+
+### Status after the exact speedups
+
+Profiling a 31.25 km run (JFR) and counting the marine work first changed the plan. Every change below gives byte-identical output on 1, 2 and 16 threads ([09 § World-model refinement](../design/09-roadmap.md#world-model-refinement) has the timings).
+
+| # | Status | What was found or done |
+|---|---|---|
+| C1 | Done | One cell budget per batch, shared by the workers (16.7M cells, ~200 MB); batch size adapts to ~8M recorded cells; buffers over 2M cells are let go. A first per-worker budget was too tight (61,000 mouths fell back to the calling thread) |
+| C2 | Done | `SeaWalk` throws past ring `radius − 1` (the true limit; the doc said `radius − 2`) |
+| C3 | Done | Documented in `SeaWalk` |
+| C4 | Not done | Small |
+| C5 | Done | 1-vs-5-thread test with a resume counter, a tiny budget and a window wider than the grid; `SeaWalk` tests on odd widths, one and two rows, resume with offsets and `dist2` |
+| P1 | Done | Saved ~2.5 s at 31.25 km |
+| P2 | Done | The profile showed 5.5 s in `ArrayList.get` alone |
+| P3 | Partly | Ceilings run on the workers. The sea-level skip (~1 s) is not done: it needs a proof that no cell hits the elevation cap |
+| P4 | Dropped | Counted: only 1.9% of mouths walk the search with nothing to fill (18% of searched cells) |
+| P5 | Dropped | Counted: 0.8% of mouths reach the whole-sea delta plain (2% of cells) |
+| P6 | Dropped | Spare rings cut carried-on walks by 20–27% but not the cells walked (the long walks remain); no faster |
+| P7 | Partly | Byte visited marks. Sea mask not merged; resume still uses the whole-grid walker |
+| P8 | Replaced | Workers flag cells already at shelf (87% of searched cells) or delta-top level in the record. Saves only ~1.7 s: the replay is bound by its serial pass over the record, not by elevation reads |
+| P9, P11 | Not done | |
+| P10 | Done | Runs along rows joined by union-find, on the workers; only enclosed regions are flooded |
+| — | Done | Found by profiling: water bodies (D-39) labelled the same way (~4 s); last subduction pair remembered (~3 s of `HashMap` lookups); eclogite, keel and rift-side loops on the workers |
+
+What limits marine spreading now (~44 s at 31.25 km): the replay's serial pass over ~4.4 × 10⁹ recorded cells, and ~0.8 × 10⁹ cells of walks carried on by one thread. The next exact step would record a second stream holding only cells with room and replay that (estimated −10 s). It is best done after the [marine science changes](Marine%20science%20plan.md), which change the per-cell levels the flags use.
 
 ## L2 — Where things are
 

@@ -95,12 +95,15 @@ final class CrustalFlow {
         markCompressional(sim.collisionMemory, compressional, 1.0);
         float[] ceiling = sim.ceilingScratch;
         float[] ceilingE = sim.ceilingElevationScratch;
-        for (int idx = 0; idx < L.n; idx++) {
-            boolean collapse = L.keel[idx] < 0f && !compressional[L.owner[idx]];
-            double e = sim.seaLevelM + (collapse ? cfg.collapseElevationM() : cfg.plateauElevationM());
-            ceilingE[idx] = (float) e;
-            ceiling[idx] = (float) Math.min(cfg.maxCrustKm(), Isostasy.thicknessForElevationKm(sim, idx, e));
-        }
+        // each cell from its own column only
+        sim.parallel.cells(L.n, (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                boolean collapse = L.keel[idx] < 0f && !compressional[L.owner[idx]];
+                double e = sim.seaLevelM + (collapse ? cfg.collapseElevationM() : cfg.plateauElevationM());
+                ceilingE[idx] = (float) e;
+                ceiling[idx] = (float) Math.min(cfg.maxCrustKm(), Isostasy.thicknessForElevationKm(sim, idx, e));
+            }
+        });
         return ceiling;
     }
 

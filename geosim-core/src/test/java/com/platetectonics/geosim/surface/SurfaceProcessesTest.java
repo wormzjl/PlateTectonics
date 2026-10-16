@@ -5,6 +5,7 @@ import com.platetectonics.geosim.climate.ClimateModel;
 import com.platetectonics.geosim.grid.CylinderGrid;
 import com.platetectonics.geosim.history.GlobalState;
 import com.platetectonics.geosim.history.WorldHistory;
+import com.platetectonics.geosim.parallel.Parallel;
 import com.platetectonics.geosim.planet.PlanetSimulation;
 import com.platetectonics.geosim.tectonics.Lithosphere;
 import com.platetectonics.geosim.tectonics.PlateSimulation;
@@ -82,6 +83,53 @@ class SurfaceProcessesTest {
         assertArrayEquals(a.climate().precipitationMm, b.climate().precipitationMm);
         assertEquals(a.surface().budget(), b.surface().budget());
         assertEquals(a.state().globalTempC(), b.state().globalTempC());
+    }
+
+    /**
+     * D-5 for marine spreading: walks made ahead on the workers, carried on where they stop short, recorded
+     * only from the mouth once a batch has used its room, or kept over the whole grid when the visited window
+     * is wider than the grid, all give the planet of one thread.
+     */
+    @Test
+    void walksMadeAheadGiveThePlanetOfOneThread() {
+        record Case(int width, SurfaceConfig cfg, int aheadCells) {
+        }
+        Case[] cases = {
+                new Case(256, SurfaceConfig.defaults(), 1 << 24),
+                new Case(256, SurfaceConfig.defaults(), 2_000),
+                new Case(128, apronKm(10_000.0), 1 << 24),
+        };
+        try (Parallel five = Parallel.of(5)) {
+            for (Case c : cases) {
+                CylinderGrid grid = CylinderGrid.forPlanet(40_000.0, c.width());
+                PlanetSimulation a = planet(grid, c.cfg());
+                PlanetSimulation b = planet(grid, c.cfg());
+                b.setParallel(five);
+                b.surface().setAheadCells(c.aheadCells());
+                for (int step = 0; step < 25; step++) {
+                    a.step(10.0);
+                    b.step(10.0);
+                }
+                assertArrayEquals(a.elevationAboveSeaM(), b.elevationAboveSeaM());
+                assertArrayEquals(a.surface().depositM, b.surface().depositM);
+                assertEquals(a.surface().budget(), b.surface().budget());
+                assertTrue(b.surface().resumedWalks() > 0, "some walks made ahead were carried on");
+            }
+        }
+    }
+
+    private static PlanetSimulation planet(CylinderGrid grid, SurfaceConfig cfg) {
+        return new PlanetSimulation(grid, 7L, TectonicsConfig.defaults(), cfg, WorldHistory.Preset.RANDOM, 2_620.0,
+                false);
+    }
+
+    /** The default surface with turbidite aprons reaching {@code km}. */
+    private static SurfaceConfig apronKm(double km) {
+        SurfaceConfig d = SurfaceConfig.defaults();
+        return new SurfaceConfig(d.streamPowerK(), d.dischargeExponent(), d.slopeExponent(), d.reliefErosionK(),
+                d.transportK(), d.softSedimentFactor(), d.bareLandFactor(), d.glacialFactor(), d.shelfDepthM(),
+                d.shelfRadiusKm(), km, d.pelagicMPerMyr(), d.oozeMPerMyr(), d.ccdDepthM(), d.carbonateMPerMyr(),
+                d.carbonateDepthM(), d.carbonateMinTempC(), d.soilProductionMPerMyr(), d.soilDecayDepthM());
     }
 
     private static double crustKm3(PlateSimulation sim) {

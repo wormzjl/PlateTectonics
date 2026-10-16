@@ -40,22 +40,28 @@ final class OrogenicRoots {
         float crustMin = (float) cfg.delaminationCrustKm();
         double loadMin = cfg.delaminationLoadM();
 
+        // each cell's roots change from its own column only
+        sim.parallel.cells(n, (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                if (L.type[idx] == Lithosphere.CONTINENTAL && L.thick[idx] > depth) {
+                    double target = cfg.eclogiteMaxFraction() * (L.thick[idx] - depth);
+                    if (L.eclogite[idx] < target) {
+                        double k = isWet(sim, idx) ? kWet : kDry;
+                        L.eclogite[idx] += (float) ((target - L.eclogite[idx]) * k);
+                    }
+                }
+                float keel = L.keel[idx];
+                if (keel > 0f) {
+                    L.keel[idx] = Math.min(keel * warm, keelMax);
+                } else if (keel < 0f) {
+                    L.keel[idx] = keel * regrow;
+                }
+            }
+        });
+        // the weights add up in cell order
         long eligible = 0;
         double weight = 0.0;
         for (int idx = 0; idx < n; idx++) {
-            if (L.type[idx] == Lithosphere.CONTINENTAL && L.thick[idx] > depth) {
-                double target = cfg.eclogiteMaxFraction() * (L.thick[idx] - depth);
-                if (L.eclogite[idx] < target) {
-                    double k = isWet(sim, idx) ? kWet : kDry;
-                    L.eclogite[idx] += (float) ((target - L.eclogite[idx]) * k);
-                }
-            }
-            float keel = L.keel[idx];
-            if (keel > 0f) {
-                L.keel[idx] = Math.min(keel * warm, keelMax);
-            } else if (keel < 0f) {
-                L.keel[idx] = keel * regrow;
-            }
             double load = load(sim, idx);
             if (L.thick[idx] >= crustMin && load > loadMin) {
                 eligible++;
