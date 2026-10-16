@@ -52,7 +52,10 @@ public final class SurfaceProcesses {
     private final int[] spill;
     private final boolean[] closedSpill;
     private final int[] queue;
-    private final int[] dist;
+    /** Distance from the river mouth and grid row of each {@link #queue} entry. */
+    private final int[] queueDist;
+    private final int[] queueRow;
+    /** Marine spreading: the mouth that last queued each ocean cell; land cells hold {@code Integer.MAX_VALUE}. */
     private final int[] stampOf;
     private final int[] apron;
     private final double[] pelagicScratch;
@@ -93,7 +96,8 @@ public final class SurfaceProcesses {
         spill = new int[n];
         closedSpill = new boolean[n];
         queue = new int[n];
-        dist = new int[n];
+        queueDist = new int[n];
+        queueRow = new int[n];
         stampOf = new int[n];
         apron = new int[n];
         pelagicScratch = new double[n];
@@ -109,6 +113,7 @@ public final class SurfaceProcesses {
      */
     public void setParallel(Parallel parallel) {
         this.parallel = parallel;
+        flow.setParallel(parallel);
     }
 
     /** One step of {@code dtMyr} on the current plates, climate and global state. */
@@ -129,6 +134,12 @@ public final class SurfaceProcesses {
         double erodedNow = erode(lith, climate, g, dtMyr);
         double landNow = transport(lith, dtMyr);
         double[] marineNow = {0.0, 0.0};
+        stamp = 0;
+        parallel.cells(n, (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                stampOf[idx] = flow.isOcean(idx) ? 0 : Integer.MAX_VALUE;
+            }
+        });
         for (int idx = 0; idx < n; idx++) {
             if (marineInput[idx] > 0f) {
                 spreadMarine(lith, idx, marineInput[idx], sea, marineNow);
@@ -368,58 +379,73 @@ public final class SurfaceProcesses {
         double shelfLevel = sea - cfg.shelfDepthM();
         int shelfCells = Math.max(1, (int) Math.round(cfg.shelfRadiusKm() / grid.cellKm()));
         int apronCells = Math.max(shelfCells + 1, (int) Math.round(cfg.apronRadiusKm() / grid.cellKm()));
-        stamp++;
+        // breadth-first over the ocean (4 neighbours: east, west, row - 1, row + 1; this order fixes the result).
+        // Land cells hold Integer.MAX_VALUE in stampOf (set in step), so one test skips land and queued cells.
+        int s = ++stamp;
         int head = 0;
-        int tail = 0;
+        int tail = 1;
         int apronCount = 0;
-        queue[tail++] = mouth;
-        stampOf[mouth] = stamp;
-        dist[mouth] = 0;
+        queue[0] = mouth;
+        queueDist[0] = 0;
+        queueRow[0] = mouth / w;
+        stampOf[mouth] = s;
+        // with no deep water in reach yet, keep looking further out before building delta plain
+        int reach = 3 * apronCells;
         double left = volume;
         while (head < tail && left > 0.0) {
-            int c = queue[head++];
-            if (dist[c] <= shelfCells) {
+            int c = queue[head];
+            int d = queueDist[head];
+            int cj = queueRow[head];
+            head++;
+            if (d <= shelfCells) {
                 left -= fillTo(lith, c, shelfLevel, left);
             } else if (elevation[c] < shelfLevel) {
                 apron[apronCount++] = c;
+                reach = apronCells;
             }
-            // with no deep water in reach yet, keep looking further out before building delta plain
-            if (dist[c] >= (apronCount > 0 ? apronCells : 3 * apronCells)) {
+            if (d >= reach) {
                 continue;
             }
-            int ci = c % w;
-            int cj = c / w;
-            for (int k = 0; k < 4; k++) {
-                int ni = k == 0 ? (ci + 1 == w ? 0 : ci + 1) : k == 1 ? (ci == 0 ? w - 1 : ci - 1) : ci;
-                int nj = k == 2 ? cj - 1 : k == 3 ? cj + 1 : cj;
-                if (nj < 0 || nj >= h) {
-                    continue;
-                }
-                int nb = nj * w + ni;
-                if (stampOf[nb] == stamp || !flow.isOcean(nb)) {
-                    continue;
-                }
-                stampOf[nb] = stamp;
-                dist[nb] = dist[c] + 1;
-                queue[tail++] = nb;
+            int rowStart = cj * w;
+            int ci = c - rowStart;
+            tail = enqueue(ci + 1 == w ? rowStart : c + 1, s, d + 1, cj, tail);
+            tail = enqueue(ci == 0 ? rowStart + w - 1 : c - 1, s, d + 1, cj, tail);
+            if (cj > 0) {
+                tail = enqueue(c - w, s, d + 1, cj - 1, tail);
+            }
+            if (cj + 1 < h) {
+                tail = enqueue(c + w, s, d + 1, cj + 1, tail);
             }
         }
         if (left > 0.0 && apronCount > 0) {
-            double each = left / apronCount;
+            double km = left / apronCount / grid.cellAreaKm2();
             for (int a = 0; a < apronCount; a++) {
-                deposit(lith, apron[a], each);
+                depositKm(lith, apron[a], km);
             }
             left = 0.0;
         }
         // an enclosed sea already filled to shelf depth: the delta top builds to sea level, then above it
+        double top = sea - 1.0;
         for (int q = 0; q < tail && left > 0.0; q++) {
-            left -= fillTo(lith, queue[q], sea - 1.0, left);
+            left -= fillTo(lith, queue[q], top, left);
         }
         if (left > 0.0) {
             deposit(lith, mouth, left);
             totals[1] += left;
         }
         totals[0] += volume;
+    }
+
+    /** Queues ocean cell {@code idx} unless it is land or already queued from this mouth; returns the new tail. */
+    private int enqueue(int idx, int s, int d, int row, int tail) {
+        if (stampOf[idx] >= s) {
+            return tail;
+        }
+        stampOf[idx] = s;
+        queue[tail] = idx;
+        queueDist[tail] = d;
+        queueRow[tail] = row;
+        return tail + 1;
     }
 
     private double fillTo(Lithosphere lith, int idx, double level, double available) {
@@ -439,7 +465,10 @@ public final class SurfaceProcesses {
      * into continental crust would make unsinkable crust out of sediment alone.
      */
     private void deposit(Lithosphere lith, int idx, double km3) {
-        double km = km3 / grid.cellAreaKm2();
+        depositKm(lith, idx, km3 / grid.cellAreaKm2());
+    }
+
+    private void depositKm(Lithosphere lith, int idx, double km) {
         double fs = lith.isContinental(idx) ? Isostasy.SEDIMENT_LAND_FACTOR : Isostasy.SEDIMENT_MARINE_FACTOR;
         lith.changeSurface(idx, (float) km, true);
         elevation[idx] += (float) (fs * 1000.0 * km);

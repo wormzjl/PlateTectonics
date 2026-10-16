@@ -1,6 +1,7 @@
 package com.platetectonics.geosim.surface;
 
 import com.platetectonics.geosim.grid.CylinderGrid;
+import com.platetectonics.geosim.parallel.Parallel;
 
 /**
  * Single-direction (D8) flow routing over the land with depressions filled (Barnes et al. 2014,
@@ -26,13 +27,18 @@ public final class FlowRouting {
     public final float[] lengthM;
     private final boolean[] ocean;
     private final boolean[] visited;
+    /** Ocean cells next to land: the starting coast. */
+    private final boolean[] coast;
     private final int[] pit;
-    private final int[] heapCell;
-    private final float[] heapKey;
+    /** Heap entries: an order-preserving int of the float key in the high half, the cell in the low half. */
+    private final long[] heap;
+    /** Index offsets of the 8 neighbours (same order as {@link #DI}, {@link #DJ}) away from the grid edges. */
+    private final int[] offset = new int[8];
     private int heapSize;
     private int landCount;
     private float[] elevation;
     private float seaLevel;
+    private Parallel parallel = Parallel.SERIAL;
 
     public FlowRouting(CylinderGrid grid) {
         this.grid = grid;
@@ -43,9 +49,20 @@ public final class FlowRouting {
         lengthM = new float[n];
         ocean = new boolean[n];
         visited = new boolean[n];
+        coast = new boolean[n];
         pit = new int[n];
-        heapCell = new int[n];
-        heapKey = new float[n];
+        heap = new long[n];
+        for (int k = 0; k < 8; k++) {
+            offset[k] = DJ[k] * grid.width() + DI[k];
+        }
+    }
+
+    /**
+     * Worker threads for the per-cell setup. The flood itself takes cells in priority order and stays on
+     * one thread.
+     */
+    public void setParallel(Parallel parallel) {
+        this.parallel = parallel;
     }
 
     /** Routes flow over {@code elevationM} (datum); cells at or below {@code seaLevelM} are ocean. */
@@ -56,31 +73,46 @@ public final class FlowRouting {
         int w = grid.width();
         int h = grid.height();
         double cellM = grid.cellKm() * 1000.0;
+        float sea = seaLevel;
+        float straightM = (float) cellM;
+        float diagonalM = (float) (cellM * Math.sqrt(2.0));
         heapSize = 0;
         landCount = 0;
-        int lowest = 0;
-        boolean anyOcean = false;
-        for (int idx = 0; idx < n; idx++) {
-            ocean[idx] = elevationM[idx] <= seaLevel;
-            visited[idx] = ocean[idx];
-            receiver[idx] = idx;
-            filled[idx] = elevationM[idx];
-            lengthM[idx] = (float) cellM;
-            anyOcean |= ocean[idx];
-            if (elevationM[idx] < elevationM[lowest]) {
-                lowest = idx;
+        parallel.cells(n, (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                ocean[idx] = elevationM[idx] <= sea;
+                visited[idx] = ocean[idx];
+                receiver[idx] = idx;
+                filled[idx] = elevationM[idx];
+                lengthM[idx] = straightM;
             }
+        });
+        int firstOcean = 0;
+        while (firstOcean < n && !ocean[firstOcean]) {
+            firstOcean++;
         }
-        if (!anyOcean) {
+        if (firstOcean == n) {
             // an all-land planet drains to its lowest point
+            int lowest = 0;
+            for (int idx = 1; idx < n; idx++) {
+                if (elevationM[idx] < elevationM[lowest]) {
+                    lowest = idx;
+                }
+            }
             ocean[lowest] = true;
             visited[lowest] = true;
         }
+        parallel.rows(h, (from, to) -> {
+            for (int idx = from * w; idx < to * w; idx++) {
+                coast[idx] = ocean[idx] && touchesLand(idx, w, h);
+            }
+        });
         for (int idx = 0; idx < n; idx++) {
-            if (ocean[idx] && touchesLand(idx, w, h)) {
-                push(idx, Math.max(seaLevel, elevationM[idx]));
+            if (coast[idx]) {
+                push(idx, Math.max(sea, elevationM[idx]));
             }
         }
+        int[] offset = this.offset;
         int pitHead = 0;
         int pitTail = 0;
         while (pitHead < pitTail || heapSize > 0) {
@@ -94,33 +126,40 @@ public final class FlowRouting {
             }
             float level;
             if (ocean[c]) {
-                level = Math.max(seaLevel, elevationM[c]);
+                level = Math.max(sea, elevationM[c]);
             } else {
                 order[landCount++] = c;
                 level = filled[c];
             }
-            int ci = c % w;
             int cj = c / w;
+            int ci = c - cj * w;
+            boolean inner = ci > 0 && ci < w - 1 && cj > 0 && cj < h - 1;
             for (int k = 0; k < 8; k++) {
-                int nj = cj + DJ[k];
-                if (nj < 0 || nj >= h) {
-                    continue;
+                int nb;
+                if (inner) {
+                    nb = c + offset[k];
+                } else {
+                    int nj = cj + DJ[k];
+                    if (nj < 0 || nj >= h) {
+                        continue;
+                    }
+                    int ni = ci + DI[k];
+                    ni = ni < 0 ? ni + w : ni >= w ? ni - w : ni;
+                    nb = nj * w + ni;
                 }
-                int ni = ci + DI[k];
-                ni = ni < 0 ? ni + w : ni >= w ? ni - w : ni;
-                int nb = nj * w + ni;
                 if (visited[nb]) {
                     continue;
                 }
                 visited[nb] = true;
                 receiver[nb] = c;
-                lengthM[nb] = (float) (k < 4 ? cellM : cellM * Math.sqrt(2.0));
-                if (elevationM[nb] <= level) {
+                lengthM[nb] = k < 4 ? straightM : diagonalM;
+                float e = elevationM[nb];
+                if (e <= level) {
                     filled[nb] = level;
                     pit[pitTail++] = nb;
                 } else {
-                    filled[nb] = elevationM[nb];
-                    push(nb, filled[nb]);
+                    filled[nb] = e;
+                    push(nb, e);
                 }
             }
         }
@@ -161,45 +200,53 @@ public final class FlowRouting {
         return false;
     }
 
-    // a binary min-heap on float keys; ties keep a fixed (deterministic) order
+    // A binary min-heap on float keys; ties keep a fixed (deterministic) order. Each entry packs the key,
+    // mapped to an int with the same order, above the cell, so one load reads both. Keys are compared
+    // through the high half only: tie order stays that of the heap, never the cell index.
+
+    private static long entry(int cell, float key) {
+        int bits = Float.floatToRawIntBits(key + 0.0f); // -0 becomes +0, which compares equal to it
+        return (long) (bits ^ ((bits >> 31) & 0x7FFFFFFF)) << 32 | cell;
+    }
 
     private void push(int cell, float key) {
+        long entry = entry(cell, key);
+        long rank = entry >> 32;
         int k = heapSize++;
         while (k > 0) {
             int parent = (k - 1) >>> 1;
-            if (heapKey[parent] <= key) {
+            long up = heap[parent];
+            if (up >> 32 <= rank) {
                 break;
             }
-            heapCell[k] = heapCell[parent];
-            heapKey[k] = heapKey[parent];
+            heap[k] = up;
             k = parent;
         }
-        heapCell[k] = cell;
-        heapKey[k] = key;
+        heap[k] = entry;
     }
 
     private int pop() {
-        int top = heapCell[0];
-        int lastCell = heapCell[--heapSize];
-        float lastKey = heapKey[heapSize];
+        long top = heap[0];
+        int size = --heapSize;
+        long last = heap[size];
+        long rank = last >> 32;
         int k = 0;
         while (true) {
             int child = 2 * k + 1;
-            if (child >= heapSize) {
+            if (child >= size) {
                 break;
             }
-            if (child + 1 < heapSize && heapKey[child + 1] < heapKey[child]) {
-                child++;
-            }
-            if (heapKey[child] >= lastKey) {
+            // Take the right child only if its key is smaller (branch-free). A right child at index size is
+            // the old copy of last, which can only end the loop here, as it would have without it.
+            child += (int) (((heap[child + 1] >> 32) - (heap[child] >> 32)) >>> 63);
+            long down = heap[child];
+            if (down >> 32 >= rank) {
                 break;
             }
-            heapCell[k] = heapCell[child];
-            heapKey[k] = heapKey[child];
+            heap[k] = down;
             k = child;
         }
-        heapCell[k] = lastCell;
-        heapKey[k] = lastKey;
-        return top;
+        heap[k] = last;
+        return (int) top;
     }
 }
