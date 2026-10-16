@@ -1,7 +1,9 @@
 package com.platetectonics.geosim.cli;
 
 import com.platetectonics.geosim.GeoSim;
+import com.platetectonics.geosim.climate.Biome;
 import com.platetectonics.geosim.climate.Climate;
+import com.platetectonics.geosim.climate.ClimateConfig;
 import com.platetectonics.geosim.events.GeoEvent;
 import com.platetectonics.geosim.field.FloatField;
 import com.platetectonics.geosim.grid.CylinderGrid;
@@ -117,18 +119,22 @@ public final class Main {
         long t0 = System.nanoTime();
         TectonicsConfig tectonics = TectonicsConfig.defaults();
         SurfaceConfig surfaceCfg = SurfaceConfig.defaults();
+        ClimateConfig climateCfg = ClimateConfig.defaults();
         for (String o : overrides) {
             String[] kv = o.split("=", 2);
             if (hasComponent(tectonics, kv[0])) {
                 tectonics = withValue(tectonics, kv[0], Double.parseDouble(kv[1]));
             } else if (hasComponent(surfaceCfg, kv[0])) {
                 surfaceCfg = withValue(surfaceCfg, kv[0], Double.parseDouble(kv[1]));
+            } else if (hasComponent(climateCfg, kv[0])) {
+                climateCfg = withValue(climateCfg, kv[0], Double.parseDouble(kv[1]));
             } else {
                 throw new IllegalArgumentException("--set: no constant named " + kv[0]);
             }
             System.out.println("set " + kv[0] + " = " + kv[1]);
         }
-        PlanetSimulation sim = new PlanetSimulation(grid, seed, tectonics, surfaceCfg, preset, oceanDepth, platesOnly);
+        PlanetSimulation sim = new PlanetSimulation(grid, seed, tectonics, surfaceCfg, climateCfg, preset, oceanDepth,
+                platesOnly);
         Parallel parallel = Parallel.of(threads);
         sim.setParallel(parallel);
         long tInit = System.nanoTime();
@@ -200,9 +206,9 @@ public final class Main {
 
         PlateSimulation.CrustBudget b = plates.crustBudget();
         System.out.printf(Locale.ROOT,
-                "crust budget (10^9 km3): arcs +%.2f, shelves +%.2f, erosion -%.2f, collision -%.2f, eclogite -%.2f, "
-                        + "subducted arc/plateau -%.2f, subduction erosion -%.2f%n",
-                b.arcs(), b.shelves(), b.erosion(), b.collision(), b.eclogite(), b.subducted(), b.forearc());
+                "crust budget (10^9 km3): arcs +%.2f, shelves +%.2f, basin closure +%.2f, erosion -%.2f, collision -%.2f, "
+                        + "eclogite -%.2f, subducted arc/plateau -%.2f, subduction erosion -%.2f%n",
+                b.arcs(), b.shelves(), b.closure(), b.erosion(), b.collision(), b.eclogite(), b.subducted(), b.forearc());
         if (!platesOnly) {
             SurfaceProcesses.Budget sb = sim.surface().budget();
             System.out.printf(Locale.ROOT,
@@ -212,6 +218,9 @@ public final class Main {
             printTimeline(sim);
         }
         printHypsometry(sim);
+        if (!platesOnly) {
+            printBiomes(sim);
+        }
         if (plates.flowBudgetExhausted()) {
             System.out.println("warning: crustal flow hit its work budget in at least one step");
         }
@@ -387,6 +396,86 @@ public final class Main {
                 contThick / n, contThick * a, contSed * a, oceanSed * a);
         System.out.printf(Locale.ROOT, "land on oceanic crust: arcs and plateaus %.1f%%, sediment piles %.1f%% of the surface%n",
                 100.0 * arcLand / e.length, 100.0 * sedimentLand / e.length);
+        double ageSum = 0.0;
+        int oceanCells = 0;
+        int old = 0;
+        for (int idx = 0; idx < e.length; idx++) {
+            if (!lith.isContinental(idx)) {
+                ageSum += lith.oceanAgeMyr(idx);
+                oceanCells++;
+                if (lith.oceanAgeMyr(idx) > 200f) {
+                    old++;
+                }
+            }
+        }
+        System.out.printf(Locale.ROOT, "ocean floor: mean age %.0f Myr, %.0f%% older than 200 Myr (Earth ~64 Myr, ~0%%) | "
+                        + "enclosed in one plate: %.1f%% of the surface%n",
+                ageSum / Math.max(1, oceanCells), 100.0 * old / Math.max(1, oceanCells),
+                100.0 * sim.plates().enclosedOceanCells() / e.length);
+    }
+
+    /** Biome groups and aridity classes over land, for comparison with Earth. */
+    private static void printBiomes(PlanetSimulation sim) {
+        float[] e = sim.elevationAboveSeaM();
+        Climate c = sim.climate();
+        int[] counts = new int[Biome.values().length];
+        int land = 0;
+        int iceFree = 0;
+        int[] arid = new int[5];
+        for (int idx = 0; idx < e.length; idx++) {
+            if (e[idx] <= 0f) {
+                continue;
+            }
+            land++;
+            Biome b = c.biome(idx, e[idx]);
+            counts[b.ordinal()]++;
+            if (b != Biome.ICE_SHEET) {
+                iceFree++;
+                double ai = c.aridity[idx];
+                arid[ai < 0.05 ? 0 : ai < 0.2 ? 1 : ai < 0.5 ? 2 : ai < 0.65 ? 3 : 4]++;
+            }
+        }
+        if (land == 0) {
+            return;
+        }
+        double ice = counts[Biome.ICE_SHEET.ordinal()];
+        double desert = counts[Biome.HOT_DESERT.ordinal()] + counts[Biome.COLD_DESERT.ordinal()]
+                + counts[Biome.POLAR_DESERT.ordinal()];
+        double tundra = counts[Biome.TUNDRA.ordinal()];
+        double open = counts[Biome.COLD_STEPPE.ordinal()] + counts[Biome.TEMPERATE_GRASSLAND.ordinal()]
+                + counts[Biome.SAVANNA.ordinal()];
+        double forest = counts[Biome.BOREAL_FOREST.ordinal()] + counts[Biome.TEMPERATE_FOREST.ordinal()]
+                + counts[Biome.TEMPERATE_RAINFOREST.ordinal()] + counts[Biome.TROPICAL_SEASONAL_FOREST.ordinal()]
+                + counts[Biome.TROPICAL_RAINFOREST.ordinal()];
+        double rain = counts[Biome.TROPICAL_RAINFOREST.ordinal()];
+        System.out.printf(Locale.ROOT, "biomes (%% of land): ice %.0f, desert %.0f, tundra %.0f, steppe/grass/savanna %.0f, "
+                        + "forest %.0f (tropical rainforest %.1f) | Earth ~10, ~20, ~8, ~27, ~31 (~7)%n",
+                100 * ice / land, 100 * desert / land, 100 * tundra / land, 100 * open / land, 100 * forest / land,
+                100 * rain / land);
+        System.out.printf(Locale.ROOT, "aridity (%% of ice-free land): hyperarid %.0f, arid %.0f, semi-arid %.0f, "
+                        + "dry subhumid %.0f, humid %.0f | Earth ~8, 12, 18, 10, 52%n",
+                100.0 * arid[0] / Math.max(1, iceFree), 100.0 * arid[1] / Math.max(1, iceFree),
+                100.0 * arid[2] / Math.max(1, iceFree), 100.0 * arid[3] / Math.max(1, iceFree),
+                100.0 * arid[4] / Math.max(1, iceFree));
+        double[] bandRain = new double[9];
+        double[] temp = new double[9];
+        int[] cells = new int[9];
+        CylinderGrid g = sim.grid();
+        for (int idx = 0; idx < e.length; idx++) {
+            if (e[idx] > 0f) {
+                int band = Math.min(8, (int) (Math.abs(g.latitudeDeg(g.jOf(idx))) / 10.0));
+                bandRain[band] += c.precipitationMm[idx];
+                temp[band] += c.temperatureC[idx];
+                cells[band]++;
+            }
+        }
+        StringBuilder sb = new StringBuilder("land rain mm/yr | T C by |latitude| band:");
+        for (int b = 0; b < 9; b++) {
+            sb.append(String.format(Locale.ROOT, " %d0s %.0f|%.0f", b, bandRain[b] / Math.max(1, cells[b]), temp[b] / Math.max(1, cells[b])));
+        }
+        System.out.println(sb + "  (Earth rain ~2000, 1200, 650, 550, 600, 550, 400, 250, 150)");
+        System.out.printf(Locale.ROOT, "land weathering %.2f x Earth (0.29 x cells x earthLandWeight); %.1f%% of the surface is land%n",
+                c.landWeathering, 100.0 * land / e.length);
     }
 
     private static void writeEvents(PlateSimulation sim, Path file) throws Exception {

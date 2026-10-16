@@ -166,14 +166,25 @@ final class PlateMotion {
         if (!incomingSubducts) {
             L.copyToBack(idx, t);
         }
-        // part of the sediment on the sinking plate is scraped off into an accretionary wedge
-        float wedge = (float) (cfg.accretedSedimentFraction() * sinkingSediment);
+        // part of the sediment on the sinking plate is scraped off into an accretionary wedge, which builds
+        // up to sea level (a forearc high); what it cannot hold goes down with the slab
+        float wedge = (float) Math.min(cfg.accretedSedimentFraction() * sinkingSediment, wedgeRoomKm(sim, t));
         L.thick2[t] += wedge;
         L.sediment2[t] += wedge;
         sim.budgetSubducted += Math.max(0.0, sinkingThick - wedge - ocean);
         L.marks2[t] |= Lithosphere.MARK_TRENCH;
         sim.addTrench(t);
         sim.subductedCells++;
+    }
+
+    /** Sediment back cell {@code t} can take before its surface reaches sea level, km. */
+    private static double wedgeRoomKm(PlateSimulation sim, int t) {
+        Lithosphere L = sim.lith;
+        boolean continental = L.type2[t] == Lithosphere.CONTINENTAL;
+        double pull = 1000.0 * (sim.cfg.keelDensityFactor() * L.keel2[t] + sim.cfg.eclogiteDensityFactor() * L.eclogite2[t]);
+        double e = Isostasy.elevationM(continental, L.thick2[t], L.oceanAge2[t], pull, L.sediment2[t]);
+        double f = continental ? Isostasy.SEDIMENT_LAND_FACTOR : Isostasy.SEDIMENT_MARINE_FACTOR;
+        return Math.max(0.0, (sim.seaLevelM - e) / (f * 1000.0));
     }
 
     /**
@@ -415,7 +426,7 @@ final class PlateMotion {
             int d = dist[idx];
             if (d >= near) {
                 float before = L.thick[idx];
-                L.thick[idx] = (float) Math.min(cfg.maxCrustKm(), before + growth);
+                L.thick[idx] = Math.max(before, (float) Math.min(cfg.maxCrustKm(), before + growth));
                 sim.budgetArc += L.thick[idx] - before;
                 L.marks[idx] |= Lithosphere.MARK_ARC;
                 if (L.type[idx] == Lithosphere.OCEANIC && L.thick[idx] >= cfg.continentThresholdKm()) {

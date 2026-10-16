@@ -203,8 +203,9 @@ public final class WorldHistory {
                 ? METHANE_WARMING_C * Math.min(1.0, (t - milestoneTimes[Milestone.LIFE.ordinal()]) / 200.0) : 0.0;
         double deficit = greenhouseDeficitC(lum, methane);
         double toWeather = Math.max(0.1 * degassing, degassing - ORGANIC_CARBON_SHARE * netOrganic);
-        double land = (Double.isNaN(in.landWeathering()) ? in.landFraction() / 0.29 : in.landWeathering())
-                * lifeOnLand(t);
+        double land = Double.isNaN(in.landWeathering())
+                ? in.landFraction() / 0.29 * lifeOnLand(t, false)
+                : in.landWeathering() * lifeOnLand(t, true);
         double equilibrium = thermostat(land, spreading, toWeather, deficit);
         if (!snowball) {
             // phosphorus supply; under the ice it waits for the thaw (then the meltwater pulse adds to it)
@@ -247,12 +248,14 @@ public final class WorldHistory {
     }
 
     /** How much life on land speeds up weathering: bare rock, microbial mats, plants, forests. */
-    private double lifeOnLand(double t) {
+    private double lifeOnLand(double t, boolean climateField) {
+        // a climate field already rains more on vegetated land (recycling, forest convection: ~1.5x the
+        // weathering of bare land), so plants add less on top of it
         if (has(Milestone.FORESTS, t)) {
-            return 1.0;
+            return climateField ? 0.7 : 1.0;
         }
         if (has(Milestone.LAND_PLANTS, t)) {
-            return 0.8;
+            return climateField ? 0.6 : 0.8;
         }
         return has(Milestone.PHOTOSYNTHESIS, t) ? 0.35 : 0.25;
     }

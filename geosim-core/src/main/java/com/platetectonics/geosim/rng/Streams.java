@@ -13,6 +13,8 @@ public final class Streams {
     public static final long MARGIN_SPLIT = 32;
     public static final long BREAKUP = 33;
     public static final long DELAMINATION = 34;
+    /** Fractional advance of the basin-closure front. */
+    public static final long BASIN_CLOSURE = 36;
     /** Wet or dry lower crust per crustal terrane (keyed by formation time). */
     public static final long ECLOGITE = 35;
     /** Box-model constants drawn once per world (Sun, mantle, thresholds). */

@@ -180,6 +180,54 @@ class PlateTectonicsTest {
     }
 
     @Test
+    void crustalFlowCarriesSedimentWithTheCrust() {
+        PlateSimulation sim = twoPlates(Lithosphere.CONTINENTAL, 35f, 0f, Lithosphere.CONTINENTAL, 35f, 0f);
+        Lithosphere L = sim.lith;
+        Arrays.fill(L.owner, 0);
+        sim.refreshStats();
+        // a foreland basin pushed into an orogen: half of each thick column is sediment
+        L.thick[8 * W + 8] = 120f;
+        L.sediment[8 * W + 8] = 60f;
+        L.thick[8 * W + 9] = 80f;
+        L.sediment[8 * W + 9] = 40f;
+        double before = 100.0;
+        CrustalFlow.relax(sim);
+
+        double after = 0.0;
+        for (int idx = 0; idx < L.n; idx++) {
+            after += L.sediment[idx];
+            assertTrue(L.sediment[idx] <= L.thick[idx] + 1e-3f, "more sediment than crust in cell " + idx);
+            assertTrue(Isostasy.elevationM(sim, idx) <= sim.cfg.plateauElevationM() + 1.0,
+                    "sediment-rich crust above the plateau ceiling: " + Isostasy.elevationM(sim, idx));
+        }
+        assertEquals(before, after, 1e-2, "flow moves sediment, it does not make or destroy it");
+        assertEquals(0.5f, L.sediment[8 * W + 8] / L.thick[8 * W + 8], 1e-3f, "the column thins as a whole");
+    }
+
+    @Test
+    void accretionaryWedgeBuildsUpToSeaLevel() {
+        // old ocean floor carrying 5 km of sediment sinks under young ocean floor
+        PlateSimulation sim = twoPlates(Lithosphere.OCEANIC, 7f, 0f, Lithosphere.OCEANIC, 12f, 100f);
+        Lithosphere L = sim.lith;
+        for (int idx = 0; idx < L.n; idx++) {
+            if (L.owner[idx] == 1) {
+                L.sediment[idx] = 5f;
+            }
+        }
+        for (int s = 0; s < 5; s++) {
+            sim.plates.get(1).shiftX = -1;
+            PlateMotion.substep(sim, 1.0, s + 1.0);
+        }
+        for (int j = 0; j < H; j++) {
+            int trench = j * W + 15;
+            assertEquals(0, L.owner[trench]);
+            assertTrue(L.sediment[trench] > 5f, "the wedge grows");
+            assertTrue(Isostasy.elevationM(sim, trench) <= sim.seaLevelM + 1.0,
+                    "the wedge stops at sea level: " + Isostasy.elevationM(sim, trench));
+        }
+    }
+
+    @Test
     void lowerCrustEclogitizesPartiallyAndRootsDelaminate() {
         PlateSimulation sim = twoPlates(Lithosphere.CONTINENTAL, 80f, 0f, Lithosphere.CONTINENTAL, 80f, 0f);
         Lithosphere L = sim.lith;
@@ -249,7 +297,9 @@ class PlateTectonicsTest {
         FloatField e = Isostasy.elevationAboveSea(sim, sim.meanOceanDepthM);
         assertTrue(s.continentalFraction() > 0.15 && s.continentalFraction() < 0.6, "continents " + s.continentalFraction());
         assertTrue(s.rmsSpeedCmPerYr() > 1.0 && s.rmsSpeedCmPerYr() < 12.0, "speed " + s.rmsSpeedCmPerYr());
-        assertTrue(e.max() <= sim.cfg.maxElevationM() + 1.0, "highest cell " + e.max());
+        // the safety cap holds cells to the sea level of the step's start; measure against that one
+        FloatField datum = Isostasy.elevation(sim);
+        assertTrue(datum.max() - sim.seaLevelM <= sim.cfg.maxElevationM() + 1.0, "highest cell " + (datum.max() - sim.seaLevelM));
         assertTrue(1.0 - e.fractionBelow(0.0) > 0.1, "some land above the sea");
     }
 

@@ -73,6 +73,32 @@ class FlowRoutingTest {
         assertFalse(flow.isLake(g.index(30, 5)), "an ordinary slope is no lake");
     }
 
+    /**
+     * 100 km cells: open sea in columns 0-14, land at +100 m east of it, a one-cell hollow at -50 m and a
+     * 4 x 4 cell inland basin at -500 m (160,000 km2, larger than {@link FlowRouting#MIN_SEA_KM2}).
+     */
+    @Test
+    void smallHollowsBelowSeaLevelAreLakesButInlandSeasStayOcean() {
+        CylinderGrid g = new CylinderGrid(W, H, 100.0);
+        float[] e = new float[g.size()];
+        for (int idx = 0; idx < e.length; idx++) {
+            int i = g.iOf(idx);
+            int j = g.jOf(idx);
+            boolean basin = i >= 30 && i < 34 && j >= 4 && j < 8;
+            e[idx] = i < 15 ? -3_000f : basin ? -500f : 100f;
+        }
+        int hollow = g.index(24, 14);
+        e[hollow] = -50f;
+        FlowRouting flow = new FlowRouting(g);
+        flow.route(e, 0.0);
+
+        assertTrue(flow.isOcean(g.index(3, 10)), "the open sea");
+        assertTrue(flow.isOcean(g.index(31, 5)), "an inland sea larger than the threshold stays a sea");
+        assertFalse(flow.isOcean(hollow), "a one-cell hollow is no sea");
+        assertTrue(flow.isLake(hollow));
+        assertEquals(100f, flow.filled[hollow], 1e-3, "it fills to its spill height");
+    }
+
     private static Float[] boxed(float[] a) {
         Float[] out = new Float[a.length];
         for (int k = 0; k < a.length; k++) {

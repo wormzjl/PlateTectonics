@@ -11,8 +11,8 @@ import java.util.TreeMap;
 /**
  * Changes the plate layout once per step: sustained continental collisions weld plates together,
  * mantle plumes thicken crust and can rift plates apart (favouring long-lived supercontinents),
- * old ocean breaks off passive margins to start subducting, tiny plates are absorbed, and the largest
- * plate breaks up if too few remain.
+ * old ocean breaks off passive margins to start subducting, tiny plates are absorbed, the largest
+ * plate breaks up if too few remain, and ocean trapped inside a plate closes ({@link BasinClosure}).
  */
 final class PlateReorganizer {
     private PlateReorganizer() {
@@ -24,6 +24,7 @@ final class PlateReorganizer {
         marginSplits(sim, dt);
         absorbTinyPlates(sim);
         keepMinimumPlates(sim);
+        BasinClosure.close(sim, dt, sim.time + dt);
         sim.refreshStats();
     }
 

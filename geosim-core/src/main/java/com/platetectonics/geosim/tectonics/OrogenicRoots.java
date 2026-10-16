@@ -146,6 +146,7 @@ final class OrogenicRoots {
                 }
                 removed += Math.max(0.0, load(sim, idx) - loadMin);
                 L.thick[idx] -= L.eclogite[idx];
+                L.sediment[idx] = Math.min(L.sediment[idx], L.thick[idx]);
                 sim.budgetEclogite += L.eclogite[idx];
                 L.eclogite[idx] = 0f;
                 L.keel[idx] = Math.min(L.keel[idx], hot);

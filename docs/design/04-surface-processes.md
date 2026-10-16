@@ -1,15 +1,15 @@
 # 04 · Surface processes: climate, sea level, rivers, erosion, deposition, glaciers, weathering
 
 > **Level 1** · Read when: you work on climate, rainfall, rivers, erosion, sediment, ice or soils.
-> Decisions: D-30, D-31, D-33 · Related: [02 step order](02-simulation-pipeline.md#order-of-operations-in-one-step), [07](07-life-atmosphere-sun.md) (global temperature, life), [03](03-tectonics.md) (crust, isostasy, trenches), [05](05-lithology.md) (where sediment will be recorded) · Go deeper: report § "Coal needs land plants…" (climate requirements for coal).
+> Decisions: D-30, D-31, D-33, D-37, D-39, D-40 · Related: [02 step order](02-simulation-pipeline.md#order-of-operations-in-one-step), [07](07-life-atmosphere-sun.md) (global temperature, life), [03](03-tectonics.md) (crust, isostasy, trenches), [05](05-lithology.md) (where sediment will be recorded) · Go deeper: report § "Coal needs land plants…" (climate requirements for coal).
 
-**Summary.** Every step, after the plates move, a **climate field** is computed from latitude, the global temperature of the box models ([07](07-life-atmosphere-sun.md)), elevation and the land–sea layout. Moisture is carried along each latitude row with the prevailing wind and, more weakly, against it, so ranges cast **rain shadows**. Rivers are routed over the land with depressions filled into **lakes**. Rock erodes by an **implicit stream-power law plus a sub-grid relief term**, and the surface drops only by the isostatic share of the rock removed, because the crust rebounds. Rivers deposit what they cannot carry; the rest builds **shelves, turbidite aprons and deltas** at sea. Sediment mass is conserved. **Ice sheets** grow where summers stay below 0 °C, and the water they hold lowers sea level. A **regolith** front advances with heat and rain and is stripped by erosion and ice. Every change goes through the crust thickness and sediment fields, so isostasy and sea level follow. Nothing is written to rock columns yet (Phase 6).
+**Summary.** Every step, after the plates move, a **climate field** is computed from latitude, the global temperature of the box models ([07](07-life-atmosphere-sun.md)), elevation and the land–sea layout. Moisture is carried along each latitude row with the prevailing wind and, more weakly, against it, and poleward from the equator (monsoons, storm tracks); plants return part of the rain to the air, and ranges cast **rain shadows**. Rivers are routed over the land with depressions filled into **lakes**; a hollow below sea level counts as a lake too unless it belongs to a sea of at least 100,000 km². Rock erodes by an **implicit stream-power law plus a sub-grid relief term**, and the surface drops only by the isostatic share of the rock removed, because the crust rebounds. Rivers deposit what they cannot carry; the rest builds **shelves, turbidite aprons and deltas** at sea. Sediment mass is conserved. **Ice sheets** grow where summers stay below 0 °C, and the water they hold lowers sea level. A **regolith** front advances with heat and rain and is stripped by erosion and ice. Every change goes through the crust thickness and sediment fields, so isostasy and sea level follow. Nothing is written to rock columns yet (Phase 6).
 
 ## As built (Phase 3) vs planned
 
 | Built (`geosim-core`, packages `climate`, `surface`) | Deferred |
 |---|---|
-| Zonal temperature with lapse rate and continentality; fixed wind belts; two-way moisture sweep with rain shadows; aridity; 16 biome classes | Ocean heat transport; wind belts that shift with global temperature; climate statistics over time |
+| Zonal temperature with lapse rate and continentality; fixed wind belts; moisture swept both ways along rows and poleward along columns; vegetation recycling and forest convection; rain shadows; aridity; 16 biome classes | Ocean heat transport and currents (cold coasts, hyper-arid deserts); wind belts that shift with global temperature; climate statistics over time |
 | Ice sheets from a mass-balance rule with a plastic profile; ice water taken out of the ocean | Ice flow, orbital cycles, moraines, till, outwash, loess, fjords |
 | D8 Priority-Flood routing with lakes and endorheic basins | Separate sediment and evaporites in endorheic lakes |
 | Implicit stream power + sub-grid relief erosion; isostatic surface drop; transport-limited deposition; lakes trap sediment | Hillslope diffusion and landslides; erodibility by rock type (needs lithology, Phase 6) |
@@ -29,14 +29,15 @@ Computed every step (`ClimateModel`) from the global state, elevation above sea 
 
 | Part | Model |
 |---|---|
-| Temperature | Zonal profile around the global mean T_g, blended by sin² of latitude: equator T_g + 13 − 0.3 (T_g − 15) °C, poles T_g − 32 + 0.5 (T_g − 15) °C. Warm worlds have a smaller pole-to-equator contrast. Sea surface at least −2 °C. Land: −6.5 °C per km of elevation; interiors (full effect 1,500 km from the coast) are up to 6 °C colder at high latitude and up to 2 °C warmer in the tropics |
+| Temperature | Zonal profile around the global mean T_g: pole + (equator − pole) × cos(latitude)^1.1, with equator T_g + 12 − 0.3 (T_g − 15) °C and poles T_g − 40 + 0.5 (T_g − 15) °C (27 and −25 °C for a 15 °C Earth; the exponent fits Earth's zonal means). Warm worlds have a smaller pole-to-equator contrast. Sea surface at least −2 °C. Land: −6.5 °C per km of elevation; interiors (full effect 1,500 km from the coast) are up to 6 °C colder at high latitude and up to 2 °C warmer in the tropics |
 | Seasonal range | Sea 2–10 °C; land 3 °C plus up to 22 °C toward the poles, larger inland |
 | Wind | Trade winds blow west below 30°, westerlies east from 30° to 60°, polar easterlies west beyond 60°. The belts are fixed |
-| Moisture | Rain over the sea follows Earth's zonal pattern (2,100 mm/yr at the equator, ~450 at 30°, ~1,050 at 55°, 150 at the poles), × e^(0.03 (T_g − 15)), × 0.1 during a snowball. Each row is swept in the prevailing wind. Over land the air rains out with distance (e-folding 2,500 km in the tropics, where forests recycle rain; 1,500 km in mid-latitudes; 1,000 km near the poles). A second sweep runs **against** the wind at 0.6 strength and 0.6 × the decay length (monsoons, cyclones on lee coasts); each cell keeps the wetter value. A light north–south smoothing follows |
-| Rain shadows | Rising air rains more (rain × (1 + 0.02 × climb in m per km)) and dries: it loses 0.45 e-folds of moisture per km climbed. Cold air holds less water (−6.5% per °C below the row's sea temperature) |
+| Moisture | Rain over the sea follows Earth's zonal pattern (2,100 mm/yr at the equator, ~450 at 30°, ~1,050 at 55°, 150 at the poles), × e^(0.03 (T_g − 15)), × 0.1 during a snowball. Each row is swept in the prevailing wind. Over bare land the air rains out with distance (e-folding 4,000 km below 25°, 3,000 km to 60°, 1,500 km beyond); within 5° of the equator it lasts 7× longer, fading out by 15°, because the converging trade winds keep resupplying it. A second sweep runs **against** the wind at 0.6 strength and 0.6 × the decay length (monsoons, cyclones on lee coasts). Then each column is swept **poleward** from the equator, starting from what the row sweeps left there: at full strength in the tropics (summer monsoons) and 0.7 in mid-latitudes (storm tracks). Each cell keeps the wettest value. Finally three box passes each way spread the rain like a Gaussian of σ = 250 km (storms and monsoons beyond the sweep lines; the same at any cell size) |
+| Vegetation | Plants return part of the rain to the air, so moisture decays over decay / (1 − share): closed forest 0.6 (Amazon-like transpiration), open vegetation 0.25, bare land 0. Cover is judged from the previous step's aridity and this step's temperature, and only once land plants (and forests) exist ([07](07-life-atmosphere-sun.md#life-milestones-stochastic)). Warm forests (above 18–24 °C) also rain up to 1.4× the zonal rate: transpiration feeds their own thunderstorms, which keeps rainforests wet |
+| Rain shadows | Rising air rains more (rain × (1 + 0.02 × climb in m per km)) and dries: it loses 0.25 e-folds of moisture per km it is lifted **above the highest ground it has already crossed**, which it forgets over 1,000 km downwind. Climbing back over lower bumps wrings out little, so finer cells, which resolve more bumps, do not dry the interior more (test: mean land rain within 15% on 100, 50 and 25 km cells). Cold air holds less water (−6.5% per °C below the row's sea temperature); that caps the rain where it falls, not the moisture carried on |
 | Aridity | P / PET, with PET = 60 mm/yr per °C above −3 °C (< 0.2 arid, > 0.65 humid) |
 | Biomes | 16 Whittaker-style classes from temperature, precipitation and aridity (`Biome`). Phase 4 maps them to TFC biomes (D-17) |
-| Land weathering | One number for the carbon thermostat ([07](07-life-atmosphere-sun.md#carbon-thermostat)): the sum over ice-free land of (P / 750 mm) × e^((T − T_g) / 13.7) × freshness, where freshness = 0.5 + 0.5 × min(1, erosion / 50 m/Myr). Normalized so an Earth-like layout gives 1 |
+| Land weathering | One number for the carbon thermostat ([07](07-life-atmosphere-sun.md#carbon-thermostat)): the sum over ice-free land of (P / 750 mm) × e^((T − T_g) / 13.7) × freshness, where freshness = 0.5 + 0.5 × min(1, erosion / 50 m/Myr). Normalized so an Earth-like layout gives 1 (mean cell weight 0.6, calibrated at 31.25 km). This rain already includes the vegetation feedback, so the thermostat's life-on-land factor is smaller when the climate field drives it (forests 0.7, plants 0.6, instead of 1.0 and 0.8) |
 
 ## Rivers, erosion, transport and deposition
 
@@ -45,6 +46,7 @@ Computed every step (`ClimateModel`) from the global state, elevation above sea 
 **Flow** (`FlowRouting`)
 
 - D8 routing over the land with depressions filled: Priority-Flood + FIFO (Barnes et al. 2014). Starting from the coast, cells are taken lowest first, and each drains to the neighbour that reached it first. Cells inside a depression take its spill level as their water surface and form a **lake** (water at least 0.5 m deep).
+- **What counts as sea** (D-39): cells below sea level joined edge to edge into a water body of at least 100,000 km² (the Caspian is 371,000 km²); the largest body stays sea if none is that big. A smaller hollow below sea level with land all round, or touching the sea only at a corner, is a depression like any other: a lake that rivers fill with sediment up to its spill level before flowing on. Before D-39 such one-cell "seas" swallowed whole rivers' loads and grew into pillars.
 - Runoff = P² / (P + PET); under ice, all of P. Discharge Q (km³/yr) is summed downstream.
 - Each lake collects its inflow and its evaporation (PET − P over the lake area). If evaporation exceeds inflow, the lake does not spill: an **endorheic** basin, marked for future evaporites.
 
@@ -65,14 +67,14 @@ Computed every step (`ClimateModel`) from the global state, elevation above sea 
 
 ## Sea floor
 
-**River sediment at a mouth** (mass conserved):
+**River sediment at a mouth** (mass conserved; D-40). Sea cells are taken nearest first by straight-line distance from the mouth, reached through the sea edge to edge, in rings one cell wide (a bucket queue). Shelves and deltas therefore grow as round fans; the breadth-first search used before drew diamonds, which showed as 45° coasts hundreds of km long. A neighbour lies at most one ring further out than the cell that queues it, so two buffers (this ring, the next) hold the whole queue.
 
-1. **Shelf:** ocean cells within 300 km of the mouth fill to 120 m below sea level.
-2. **Turbidite aprons:** the rest spreads evenly over deeper cells out to 900 km. If no deep water lies within 900 km, the search continues to 2,700 km.
-3. **Delta top:** in an enclosed sea with no deep water in reach, the cells fill to 1 m below sea level.
-4. **Delta plain:** any surplus is deposited at the mouth and builds land.
+1. **Shelf:** sea cells within 300 km of the mouth fill to 120 m below sea level.
+2. **Turbidite aprons:** the rest is shared evenly among the deeper cells out to 900 km (2,700 km if no deep water lies within 900 km), none built above 120 m below sea level; a full cell passes its share on to the others.
+3. **Delta top:** what is left fills the sea to 1 m below sea level, nearest first, prograding past the search radius across the sea as far as it takes.
+4. **Delta plain:** only when the whole connected sea is full does the surplus spread evenly over it and build land.
 
-Small ocean basins enclosed by continental blocks (rift and back-arc slivers left by the plate engine) fill up this way and become land on oceanic crust: 3–8% of the planet's surface in tuning runs. That is like the Pannonian Basin, and it makes continents more coherent.
+Before D-40, steps 2 and 4 put the surplus on as few cells as they found, often the mouth alone: about 20% of all marine sediment piled into single cells. Small seas no longer fill up as whole basins: ocean floor that one plate wraps round closes tectonically (D-36, [03](03-tectonics.md#boundary-processes)), and hollows below sea level smaller than 100,000 km² are lakes (D-39).
 
 **Settling in place:**
 
@@ -80,7 +82,7 @@ Small ocean basins enclosed by continental blocks (rift and back-arc slivers lef
 - Carbonate ooze: +6 m/Myr above the carbonate compensation depth (4,500 m) once calcareous plankton exist ([07](07-life-atmosphere-sun.md#life-milestones-stochastic)).
 - Shallow carbonate (reefs, platforms): 40 m/Myr in water 5–150 m deep and at least 20 °C. Full rate once animals exist, × 0.3 with microbial life only, × 0.1 before life. Growth stops 5 m below sea level.
 
-**Sediment on ocean floor stays oceanic** (D-31). It forms a passive-margin wedge on transitional crust, rides with its plate to a trench, and is recycled there: 50% is scraped into the overriding plate's accretionary wedge, the rest subducts ([03](03-tectonics.md#crust-growth)). Converting thick piles to continental crust made unsinkable crust from sediment alone and inflated continental area to ~58%.
+**Sediment on ocean floor stays oceanic** (D-31). It forms a passive-margin wedge on transitional crust, rides with its plate to a trench, and is recycled there: 50% is scraped into the overriding plate's accretionary wedge, which builds up to sea level (D-38), and the rest subducts ([03](03-tectonics.md#crust-growth)). Converting thick piles to continental crust made unsinkable crust from sediment alone and inflated continental area to ~58%.
 
 ## Glaciers
 
@@ -110,7 +112,7 @@ Arid cells with a sand supply (deltas, beaches, eroded sandstone) become dune fi
 
 ## Constants
 
-`SurfaceConfig.defaults()`. Any of them can be changed for one CLI run with `--set name=value` (for example `--set reliefErosionK=30`). Climate constants (lapse rate, reverse-flow strength 0.6, rise drying 0.45 per km) are fixed in `ClimateModel`.
+`SurfaceConfig.defaults()` and `ClimateConfig.defaults()`. Any of them can be changed for one CLI run with `--set name=value` (for example `--set reliefErosionK=30` or `--set monsoonFlow=0.8`). The lapse rate and the zonal sea rain are fixed in `ClimateModel`.
 
 | Constant | Value | Unit | Meaning |
 |---|---|---|---|
@@ -134,16 +136,31 @@ Arid cells with a sand supply (deltas, beaches, eroded sandstone) become dune fi
 | `soilProductionMPerMyr` | 60 | m/Myr | Weathering-front advance into bare rock, warm and wet, under forests |
 | `soilDecayDepthM` | 5 | m | Production falls by e for each this many metres of regolith |
 
+| Climate constant | Value | Unit | Meaning |
+|---|---|---|---|
+| `equatorOffsetC`, `poleOffsetC` | 12, −40 | °C | Sea-level temperature at the equator and the poles minus the global mean (Earth-like mean) |
+| `profileExponent` | 1.1 | — | Temperature between them follows cos(latitude)^exponent |
+| `decayTropicsKm`, `decayMidKm`, `decayPolarKm` | 4,000, 3,000, 1,500 | km | Moisture e-folding distance over bare land below 25°, to 60°, beyond |
+| `itczDecayFactor` | 6 | × | Equatorial moisture lasts 1 + this times longer (full within 5°, gone by 15°) |
+| `forestRecycling`, `openRecycling` | 0.6, 0.25 | share | Rain that forests and open vegetation return to the air |
+| `landConvection` | 0.4 | × | Warm forests rain up to 1 + this times the zonal rate |
+| `reverseFlow` | 0.6 | × | Flow against the prevailing wind, relative to it |
+| `monsoonFlow`, `stormTrackFlow` | 1.0, 0.7 | × | Poleward sweeps in the tropics and mid-latitudes |
+| `mixingKm` | 250 | km | Spread of rain beyond the sweep lines (σ) |
+| `riseDryingPerKm` | 0.25 | e-folds per km | Drying of air lifted above the highest ground it has crossed |
+| `crestRelaxKm` | 1,000 | km | Distance over which the air forgets that crest |
+| `earthLandWeight` | 0.6 | — | Mean weathering weight of a land cell for an Earth-like layout (normalizes land weathering) |
+
 ## Known gaps
 
 - **Ocean-floor sediment is too thick.** At 4.5 Gyr ~1.2–1.6 × 10⁹ km³ stands on the sea floor, roughly 2–3× an Earth-scaled estimate. The marine flux is Earth-like, but sediment stays ~120 Myr on the sea floor before a trench recycles it, against Earth's ~40 Myr.
-- Moisture is swept along rows, so precipitation maps show east–west streaks.
+- **No ocean currents or subtropical highs**, so there are no hyper-arid desert cores or cold-coast deserts (Atacama, Namib). Land at 20–30° gets 330–390 mm/yr against Earth's ~600, yet deserts cover only 6–11% of land (Earth ~20%): cells there are dry rather than hyper-arid. Ice covers 13–21% of land (Earth ~10%). Forests and grasslands are near Earth's shares (78 km cells, 4 seeds).
+- **Continental interiors sit close to sea level** (median 120–240 m above sea level at 78 km; Earth's continents stand higher). Where they are flat, small sea-level changes flood or expose large areas, so the flooded share of continental crust varies from run to run. Freeboard (cratonic buoyancy, dynamic topography) is not modelled.
 - No hillslope diffusion or landslides beyond the tectonic slope relaxation of thick crust ([03](03-tectonics.md#plateaus-and-roots)).
 - Glaciers are v0: no ice flow, no orbital cycles, no moraines or loess.
 - Endorheic lakes do not yet keep their sediment separately or make evaporites.
 - Climate statistics over time ("time ever-wet", "time hyper-arid") are not accumulated yet. Coal, laterite, evaporite and supergene-copper rules need them, because those deposits depend on how long conditions lasted.
 - No lithology or rock columns (Phase 6): erodibility ignores rock type, and each cell has one sediment thickness.
-- The cell-size dependence of the flooded-continent share is still being checked (O-6).
 
 ## References
 

@@ -66,6 +66,42 @@ class ClimateModelTest {
         assertTrue(eastTrop > 1.5 * westTrop, "tropical rain shadow west of the range: " + eastTrop + " vs " + westTrop);
     }
 
+    /**
+     * The same hilly continent (6,000 km wide, a 3 km range, hills of +-400 m on ~600 km wavelengths) on
+     * 100, 50 and 25 km cells: finer cells resolve more relief, but land rain must stay about the same.
+     */
+    @Test
+    void landRainBarelyDependsOnCellSize() {
+        double[] mean = new double[3];
+        for (int r = 0; r < 3; r++) {
+            double cellKm = 100.0 / (1 << r);
+            CylinderGrid g = new CylinderGrid(160 << r, 80 << r, cellKm);
+            float[] e = new float[g.size()];
+            for (int idx = 0; idx < e.length; idx++) {
+                double x = (g.iOf(idx) + 0.5) * cellKm;
+                double y = (g.jOf(idx) + 0.5) * cellKm;
+                boolean land = x > 5_000.0 && x < 11_000.0;
+                double hills = 400.0 * Math.sin(2.0 * Math.PI * x / 550.0) * Math.sin(2.0 * Math.PI * y / 650.0);
+                double range = 3_000.0 * Math.exp(-Math.pow((x - 8_000.0) / 150.0, 2.0));
+                e[idx] = land ? (float) (600.0 + hills + range) : -4_000f;
+            }
+            Climate c = new ClimateModel(g).compute(earthToday(), e, null, null);
+            double sum = 0.0;
+            int n = 0;
+            for (int idx = 0; idx < e.length; idx++) {
+                if (e[idx] > 0f) {
+                    sum += c.precipitationMm[idx];
+                    n++;
+                }
+            }
+            mean[r] = sum / n;
+        }
+        for (int r = 1; r < 3; r++) {
+            assertTrue(mean[r] > 0.85 * mean[0] && mean[r] < 1.15 * mean[0],
+                    "mean land rain " + Arrays.toString(mean) + " mm on 100, 50, 25 km cells");
+        }
+    }
+
     @Test
     void polesAreColdAndIcyAndTheEquatorWarm() {
         CylinderGrid g = new CylinderGrid(W, H, 200.0);

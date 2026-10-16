@@ -63,15 +63,25 @@ public final class Isostasy {
 
     /** Elevation on the datum for one cell, capped at {@code maxElevationM} above the current sea level. */
     static double elevationM(PlateSimulation sim, int idx) {
-        Lithosphere L = sim.lith;
-        double e = elevationM(L.type[idx] == Lithosphere.CONTINENTAL, L.thick[idx], L.oceanAge[idx], rootPullM(sim, idx),
-                L.sediment[idx]);
-        return Math.min(e, sim.seaLevelM + sim.cfg.maxElevationM());
+        return Math.min(uncappedElevationM(sim, idx), sim.seaLevelM + sim.cfg.maxElevationM());
     }
 
-    /** Crust thickness at which a continental cell would stand at {@code elevationM}, given its roots. */
+    /** Elevation on the datum for one cell, without the safety cap. */
+    static double uncappedElevationM(PlateSimulation sim, int idx) {
+        Lithosphere L = sim.lith;
+        return elevationM(L.type[idx] == Lithosphere.CONTINENTAL, L.thick[idx], L.oceanAge[idx], rootPullM(sim, idx),
+                L.sediment[idx]);
+    }
+
+    /**
+     * Crust thickness at which a continental cell would stand at {@code elevationM}, given its roots, if
+     * the whole column (crystalline crust and its share of lighter sediment) thinned or thickened together.
+     */
     static double thicknessForElevationKm(PlateSimulation sim, int idx, double elevationM) {
-        return DATUM_CRUST_KM + (elevationM + rootPullM(sim, idx)) / (AIRY_FACTOR * 1000.0);
+        Lithosphere L = sim.lith;
+        double share = L.thick[idx] > 0f ? Math.min(1.0, L.sediment[idx] / L.thick[idx]) : 0.0;
+        double perKm = (AIRY_FACTOR + (SEDIMENT_LAND_FACTOR - AIRY_FACTOR) * share) * 1000.0;
+        return Math.max(0.0, (elevationM + rootPullM(sim, idx) + AIRY_FACTOR * DATUM_CRUST_KM * 1000.0) / perKm);
     }
 
     /** Elevation on the datum for every cell. */

@@ -45,7 +45,13 @@ public final class PlateSimulation {
     // scratch shared by the motion code
     final int[] queue;
     final int[] dist;
+    // basin closure scratch (BasinClosure)
+    final int[] closureOrder;
+    final boolean[] closureSeen;
+    final float[] closureFill;
     final float[] ceilingScratch;
+    /** Elevation each cell may reach in crustal flow, m on the datum (scratch). */
+    final float[] ceilingElevationScratch;
     /** Plate motion: where each cell moves (-1: lost at a pole), which cell claims each target first, and the rest. */
     final int[] moveTarget;
     final int[] moveFirst;
@@ -77,6 +83,7 @@ public final class PlateSimulation {
     double budgetEclogite;
     double budgetSubducted;
     double budgetForearc;
+    double budgetClosure;
 
     public PlateSimulation(CylinderGrid grid, long seed, TectonicsConfig cfg) {
         this.grid = grid;
@@ -85,7 +92,11 @@ public final class PlateSimulation {
         this.lith = new Lithosphere(grid);
         this.queue = new int[grid.size()];
         this.dist = new int[grid.size()];
+        this.closureOrder = new int[grid.size()];
+        this.closureSeen = new boolean[grid.size()];
+        this.closureFill = new float[grid.size()];
         this.ceilingScratch = new float[grid.size()];
+        this.ceilingElevationScratch = new float[grid.size()];
         this.moveTarget = new int[grid.size()];
         this.moveFirst = new int[grid.size()];
         this.moveLater = new int[grid.size()];
@@ -354,6 +365,11 @@ public final class PlateSimulation {
         this.erosionStandIn = on;
     }
 
+    /** Oceanic cells enclosed by one plate's continental crust (basins that {@link BasinClosure} closes). */
+    public int enclosedOceanCells() {
+        return BasinClosure.enclosedCells(this);
+    }
+
     /** Recomputes sea level after outside changes to the crust (erosion, deposition, ice). */
     public void refreshSeaLevel() {
         updateSeaLevel();
@@ -505,7 +521,7 @@ public final class PlateSimulation {
     public CrustBudget crustBudget() {
         double s = grid.cellAreaKm2() / 1e9;
         return new CrustBudget(budgetArc * s, budgetShelf * s, budgetErosion * s, budgetCollision * s,
-                budgetEclogite * s, budgetSubducted * s, budgetForearc * s);
+                budgetEclogite * s, budgetSubducted * s, budgetForearc * s, budgetClosure * s);
     }
 
     /**
@@ -518,7 +534,7 @@ public final class PlateSimulation {
      * @param forearc   crust scraped off overriding plates by subduction erosion
      */
     public record CrustBudget(double arcs, double shelves, double erosion, double collision, double eclogite,
-                              double subducted, double forearc) {
+                              double subducted, double forearc, double closure) {
     }
 
     public StepStats stats() {

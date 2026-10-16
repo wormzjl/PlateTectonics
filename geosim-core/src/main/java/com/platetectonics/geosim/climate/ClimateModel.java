@@ -2,6 +2,7 @@ package com.platetectonics.geosim.climate;
 
 import com.platetectonics.geosim.grid.CylinderGrid;
 import com.platetectonics.geosim.history.GlobalState;
+import com.platetectonics.geosim.history.Milestone;
 import com.platetectonics.geosim.parallel.Parallel;
 
 /**
@@ -12,11 +13,13 @@ import com.platetectonics.geosim.parallel.Parallel;
  *       worlds), minus 6.5 C per km of elevation; continental interiors are colder at high latitude and
  *       have a larger seasonal range.</li>
  *   <li>Wind: trade winds blow west below 30 deg, westerlies east to 60 deg, polar easterlies west.</li>
- *   <li>Moisture is swept along each row with the wind. Air over the sea is saturated; over land it rains
- *       out with distance (slowly in the tropics, where forests recycle rain), and rising air rains more
- *       and dries: windward slopes are wet and the lee lies in a rain shadow. Cold high ground holds
- *       little moisture. The zonal base pattern has the wet equator, dry subtropics, wet storm tracks
- *       and dry poles.</li>
+ *   <li>Moisture is swept along each row with the wind, then poleward along each column (monsoons in the
+ *       tropics, storm tracks in mid-latitudes). Air over the sea is saturated; over land it rains out
+ *       with distance, more slowly where plants return rain to the air (forests most, judged from the
+ *       previous step's climate; bare land before land plants not at all). Rising air rains more and
+ *       dries: windward slopes are wet and the lee lies in a rain shadow. Cold high ground holds little
+ *       moisture. The zonal base pattern has the wet equator, dry subtropics, wet storm tracks and dry
+ *       poles.</li>
  *   <li>Ice sheets grow on land with no summer melt. Their thickness follows a perfectly plastic ice
  *       profile, H = sqrt(2 tau d / (rho g)) with d the distance from the ice margin.</li>
  * </ul>
@@ -29,27 +32,28 @@ public final class ClimateModel {
     private static final double LAPSE_C_PER_M = 6.5 / 1000.0;
     private static final double ICE_RHO_G = 917.0 * 9.81;
     private static final double ICE_YIELD_PA = 1.0e5;
-    /**
-     * Mean weathering weight of a land cell in this climate model for an Earth-like layout (rain inland is
-     * below the coastal value, most land erodes slowly): normalizes land weathering to 1 for Earth today.
-     */
-    private static final double EARTH_LAND_WEIGHT = 0.45;
-    /** Strength of the flow against the prevailing wind (monsoons, cyclones), relative to it. */
-    private static final double REVERSE_FLOW = 0.6;
-    /** North-south spread of rain by storms and monsoons (one sigma), km. */
-    private static final double MIXING_KM = 100.0;
-    /** Rising air loses this share of its moisture (as e-folds) per km climbed. */
-    private static final double RISE_DRYING_PER_KM = 0.45;
 
     private final CylinderGrid grid;
+    private final ClimateConfig cfg;
     private final int[] queue;
     private final int[] dist;
     private final float[] mixScratch;
+    /** Share of the rain that plants return to the air, per cell, from the previous step's climate. */
+    private final float[] recycling;
+    /** Forest cover 0..1 times tropical warmth, per cell: where forests drive their own convection. */
+    private final float[] convection;
     private final double[] weatheringScratch;
     private Parallel parallel = Parallel.SERIAL;
 
     public ClimateModel(CylinderGrid grid) {
+        this(grid, ClimateConfig.defaults());
+    }
+
+    public ClimateModel(CylinderGrid grid, ClimateConfig cfg) {
         this.grid = grid;
+        this.cfg = cfg;
+        this.recycling = new float[grid.size()];
+        this.convection = new float[grid.size()];
         this.queue = new int[grid.size()];
         this.dist = new int[grid.size()];
         this.mixScratch = new float[grid.size()];
@@ -80,13 +84,14 @@ public final class ClimateModel {
     private void temperature(GlobalState g, float[] e, Climate c) {
         int w = grid.width();
         double tg = g.globalTempC();
-        double equator = tg + 13.0 - 0.3 * (tg - 15.0);
-        double pole = tg - 32.0 + 0.5 * (tg - 15.0);
+        double equator = tg + cfg.equatorOffsetC() - 0.3 * (tg - 15.0);
+        double pole = tg + cfg.poleOffsetC() + 0.5 * (tg - 15.0);
         parallel.rows(grid.height(), (from, to) -> {
             for (int j = from; j < to; j++) {
-                double s = Math.sin(Math.toRadians(grid.latitudeDeg(j)));
+                double lat = Math.toRadians(grid.latitudeDeg(j));
+                double s = Math.sin(lat);
                 double s2 = s * s;
-                double sea = equator + (pole - equator) * s2;
+                double sea = pole + (equator - pole) * Math.pow(Math.cos(lat), cfg.profileExponent());
                 for (int i = 0; i < w; i++) {
                     int idx = j * w + i;
                     if (e[idx] <= 0f) {
@@ -110,40 +115,35 @@ public final class ClimateModel {
         double cellKm = grid.cellKm();
         double wetter = Math.exp(0.03 * (g.globalTempC() - 15.0)) * (g.snowball() ? 0.1 : 1.0);
         float[] p = c.precipitationMm;
+        vegetation(g, c);
         // rows are independent: each sweep reads and writes its own row only
         parallel.rows(h, (from, to) -> {
             for (int j = from; j < to; j++) {
                 double lat = Math.abs(grid.latitudeDeg(j));
                 double zonal = zonal(lat) * wetter;
                 int dir = lat < 30.0 ? -1 : lat < 60.0 ? 1 : -1;
-                double decayKm = lat < 25.0 ? 2_500.0 : lat < 60.0 ? 1_500.0 : 1_000.0;
+                double decayKm = decayKm(lat);
                 // prevailing wind, then the weaker flow from the other side (monsoons, cyclones on lee coasts)
                 sweep(c, e, j, dir, zonal, decayKm, 1.0, p, false);
-                sweep(c, e, j, -dir, zonal, decayKm * 0.6, REVERSE_FLOW, p, true);
+                sweep(c, e, j, -dir, zonal, decayKm * 0.6, cfg.reverseFlow(), p, true);
             }
         });
-        // north-south mixing (storms and monsoons are not zonal): repeated 1-2-1 passes, each adding half a
-        // cell squared of variance, to a spread of MIXING_KM whatever the cell size; ping-pong buffers
-        int passes = Math.max(1, (int) Math.round(2.0 * Math.pow(MIXING_KM / cellKm, 2.0)));
-        float[] src = p;
-        float[] dst = mixScratch;
-        for (int pass = 0; pass < passes; pass++) {
-            float[] a = src;
-            float[] b = dst;
-            parallel.rows(h, (from, to) -> {
-                for (int j = from; j < to; j++) {
-                    int jn = Math.max(0, j - 1);
-                    int js = Math.min(h - 1, j + 1);
-                    for (int i = 0; i < w; i++) {
-                        b[j * w + i] = 0.5f * a[j * w + i] + 0.25f * (a[jn * w + i] + a[js * w + i]);
-                    }
+        if (cfg.monsoonFlow() > 0.0 || cfg.stormTrackFlow() > 0.0) {
+            // columns are independent: each poleward sweep reads and writes its own column only
+            parallel.range(w, 8, (from, to) -> {
+                for (int i = from; i < to; i++) {
+                    poleward(c, e, i, -1, wetter, p);
+                    poleward(c, e, i, 1, wetter, p);
                 }
             });
-            src = b;
-            dst = a;
         }
-        if (src != p) {
-            System.arraycopy(src, 0, p, 0, p.length);
+        // storms and monsoons spread rain beyond the sweep lines: three box passes in each direction,
+        // together close to a Gaussian of spread mixingKm whatever the cell size
+        double sigma = cfg.mixingKm() / cellKm;
+        int r = (int) Math.round((Math.sqrt(4.0 * sigma * sigma + 1.0) - 1.0) / 2.0);
+        for (int pass = 0; pass < 3 && r > 0; pass++) {
+            boxRows(p, mixScratch, r);
+            boxColumns(mixScratch, p, r);
         }
         parallel.cells(p.length, (from, to) -> {
             for (int idx = from; idx < to; idx++) {
@@ -151,6 +151,140 @@ public final class ClimateModel {
                 c.aridity[idx] = (float) (pet <= 1.0 ? 10.0 : Math.min(10.0, p[idx] / pet));
             }
         });
+    }
+
+    /** Mean over {@code 2r + 1} cells along each row (rows wrap around the cylinder). */
+    private void boxRows(float[] src, float[] dst, int r) {
+        int w = grid.width();
+        int span = Math.min(r, (w - 1) / 2);
+        parallel.rows(grid.height(), (from, to) -> {
+            for (int j = from; j < to; j++) {
+                int row = j * w;
+                double sum = 0.0;
+                for (int k = -span; k <= span; k++) {
+                    sum += src[row + Math.floorMod(k, w)];
+                }
+                for (int i = 0; i < w; i++) {
+                    dst[row + i] = (float) (sum / (2 * span + 1));
+                    sum += src[row + Math.floorMod(i + span + 1, w)] - src[row + Math.floorMod(i - span, w)];
+                }
+            }
+        });
+    }
+
+    /** Mean over up to {@code 2r + 1} cells along each column (the window shrinks at the poles). */
+    private void boxColumns(float[] src, float[] dst, int r) {
+        int w = grid.width();
+        int h = grid.height();
+        parallel.range(w, 8, (from, to) -> {
+            for (int i = from; i < to; i++) {
+                double sum = 0.0;
+                int count = 0;
+                for (int j = 0; j <= Math.min(r, h - 1); j++) {
+                    sum += src[j * w + i];
+                    count++;
+                }
+                for (int j = 0; j < h; j++) {
+                    dst[j * w + i] = (float) (sum / count);
+                    int add = j + r + 1;
+                    int drop = j - r;
+                    if (add < h) {
+                        sum += src[add * w + i];
+                        count++;
+                    }
+                    if (drop >= 0) {
+                        sum -= src[drop * w + i];
+                        count--;
+                    }
+                }
+            }
+        });
+    }
+
+    /**
+     * Moisture e-folding distance over bare land. Near the equator the converging trade winds of the
+     * intertropical convergence zone keep resupplying the air, so moisture lasts {@code 1 + itczDecayFactor}
+     * times longer there (fading out from 5 to 15 deg); rising air still dries, so rain shadows remain.
+     */
+    private double decayKm(double absLat) {
+        double base = absLat < 25.0 ? cfg.decayTropicsKm() : absLat < 60.0 ? cfg.decayMidKm() : cfg.decayPolarKm();
+        double itcz = Math.max(0.0, Math.min(1.0, (15.0 - absLat) / 10.0));
+        return base * (1.0 + cfg.itczDecayFactor() * itcz);
+    }
+
+    /**
+     * How much rain the plants of each land cell return to the air, judged from the previous step's
+     * aridity and this step's temperature: forests where it was moist and warm enough once forests exist,
+     * open vegetation once land plants exist, nothing on bare land.
+     */
+    private void vegetation(GlobalState g, Climate c) {
+        boolean plants = g.has(Milestone.LAND_PLANTS);
+        boolean forests = g.has(Milestone.FORESTS);
+        parallel.cells(recycling.length, (from, to) -> {
+            for (int idx = from; idx < to; idx++) {
+                double r = 0.0;
+                double convect = 0.0;
+                if (plants && c.iceM[idx] <= 0f) {
+                    double warm = clamp((c.temperatureC[idx] + 5.0) / 15.0);
+                    double moist = clamp(c.aridity[idx] / 0.5);
+                    r = cfg.openRecycling() * moist * warm;
+                    if (forests) {
+                        double canopy = clamp((c.aridity[idx] - 0.4) / 0.4) * warm;
+                        r = Math.max(r, cfg.forestRecycling() * canopy);
+                        convect = canopy * clamp((c.temperatureC[idx] - 18.0) / 6.0);
+                    }
+                }
+                recycling[idx] = (float) r;
+                convection[idx] = (float) convect;
+            }
+        });
+    }
+
+    private static double clamp(double v) {
+        return Math.max(0.0, Math.min(1.0, v));
+    }
+
+    /**
+     * Carries moisture poleward along column {@code i} from the equator ({@code dir} -1: north, +1: south),
+     * starting from what the row sweeps left at the equator, and keeps the wetter result: summer monsoons
+     * in the tropics, storm tracks in mid-latitudes.
+     */
+    private void poleward(Climate c, float[] e, int i, int dir, double wetter, float[] p) {
+        int w = grid.width();
+        int h = grid.height();
+        double cellKm = grid.cellKm();
+        int j = dir < 0 ? h / 2 - 1 : h / 2;
+        int idx0 = j * w + i;
+        double zonal0 = zonal(Math.abs(grid.latitudeDeg(j))) * wetter;
+        double q = e[idx0] <= 0f ? 1.0 : Math.min(1.0, p[idx0] / Math.max(1e-9, zonal0));
+        double seaTemp = c.temperatureC[idx0];
+        double prevE = Math.max(0.0, e[idx0]);
+        double crest = prevE;
+        double relax = Math.exp(-cellKm / cfg.crestRelaxKm());
+        for (; j >= 0 && j < h; j += dir) {
+            int idx = j * w + i;
+            double lat = Math.abs(grid.latitudeDeg(j));
+            double weight = lat < 25.0 ? cfg.monsoonFlow() : lat < 60.0 ? cfg.stormTrackFlow() : 0.0;
+            double elev = e[idx];
+            if (elev <= 0.0) {
+                q = 1.0;
+                seaTemp = c.temperatureC[idx];
+                prevE = 0.0;
+                crest = 0.0;
+                continue;
+            }
+            double rise = Math.max(0.0, elev - prevE);
+            crest *= relax;
+            double above = Math.max(0.0, elev - crest);
+            crest = Math.max(crest, elev);
+            double hold = Math.exp(0.065 * Math.min(0.0, c.temperatureC[idx] - seaTemp));
+            double rain = weight * zonal(lat) * wetter * Math.min(q, hold) * (1.0 + 0.02 * rise / cellKm)
+                    * (1.0 + cfg.landConvection() * convection[idx]);
+            p[idx] = Math.max(p[idx], (float) rain);
+            q *= Math.exp(-cellKm * (1.0 - recycling[idx]) / decayKm(lat))
+                    * Math.exp(-cfg.riseDryingPerKm() * above / 1_000.0);
+            prevE = elev;
+        }
     }
 
     /**
@@ -173,6 +307,8 @@ public final class ClimateModel {
         double q = start < 0 ? 0.5 : 1.0;
         int i = start < 0 ? 0 : start;
         double prevE = 0.0;
+        double crest = 0.0;
+        double relax = Math.exp(-cellKm / cfg.crestRelaxKm());
         for (int step = 0; step < w; step++, i = Math.floorMod(i + dir, w)) {
             int idx = j * w + i;
             double elev = e[idx];
@@ -181,14 +317,21 @@ public final class ClimateModel {
                 q = 1.0;
                 rain = zonal;
                 prevE = 0.0;
+                crest = 0.0;
             } else {
                 double rise = Math.max(0.0, elev - prevE);
-                // cold air holds less water (Clausius-Clapeyron, ~6.5% per degree)
+                // air dries when lifted above the highest ground it has crossed (which it slowly forgets
+                // downwind); climbing back over lower bumps wrings out little, whatever the cell size
+                crest *= relax;
+                double above = Math.max(0.0, elev - crest);
+                crest = Math.max(crest, elev);
+                // cold air holds less water (Clausius-Clapeyron, ~6.5% per degree): it limits the rain here;
+                // what the air loses crossing high ground is the drying above the crest
                 double hold = Math.exp(0.065 * Math.min(0.0, c.temperatureC[idx] - seaTemp));
-                q = Math.min(q, hold);
                 double lift = rise / cellKm; // m per km
-                rain = zonal * q * (1.0 + 0.02 * lift);
-                q *= Math.exp(-cellKm / decayKm) * Math.exp(-RISE_DRYING_PER_KM * rise / 1_000.0);
+                rain = zonal * Math.min(q, hold) * (1.0 + 0.02 * lift) * (1.0 + cfg.landConvection() * convection[idx]);
+                q *= Math.exp(-cellKm * (1.0 - recycling[idx]) / decayKm)
+                        * Math.exp(-cfg.riseDryingPerKm() * above / 1_000.0);
                 prevE = elev;
             }
             p[idx] = keepWetter ? Math.max(p[idx], (float) (weight * rain)) : (float) rain;
@@ -340,6 +483,6 @@ public final class ClimateModel {
                 sum += term[idx];
             }
         }
-        c.landWeathering = sum / (0.29 * grid.size() * EARTH_LAND_WEIGHT);
+        c.landWeathering = sum / (0.29 * grid.size() * cfg.earthLandWeight());
     }
 }

@@ -9,10 +9,16 @@ import com.platetectonics.geosim.parallel.Parallel;
  * the neighbour that reached it first, which is its lowest neighbour on the filled surface. Cells inside
  * a depression get the depression's spill level as their water surface and form a lake.
  * <p>
+ * The ocean is the water below sea level that belongs to a sea of at least {@link #MIN_SEA_KM2}. A
+ * smaller hollow below sea level with land all round is a depression like any other: a lake that rivers
+ * fill with sediment up to its spill level, rather than a one-cell sea that swallows a river's whole load.
+ * <p>
  * {@link #order} lists land cells so that every cell comes after its receiver (downstream first);
  * walking it backwards visits every cell before its receiver (upstream first).
  */
 public final class FlowRouting {
+    /** Smallest enclosed sea, km2 (the Caspian is 371,000); smaller hollows below sea level are lakes. */
+    public static final double MIN_SEA_KM2 = 100_000.0;
     private static final int[] DI = {1, -1, 0, 0, 1, -1, 1, -1};
     private static final int[] DJ = {0, 0, 1, -1, 1, 1, -1, -1};
 
@@ -87,6 +93,7 @@ public final class FlowRouting {
                 lengthM[idx] = straightM;
             }
         });
+        dropSmallSeas(n, w, h);
         int firstOcean = 0;
         while (firstOcean < n && !ocean[firstOcean]) {
             firstOcean++;
@@ -163,6 +170,78 @@ public final class FlowRouting {
                 }
             }
         }
+    }
+
+    /**
+     * Turns water bodies below sea level smaller than {@link #MIN_SEA_KM2} into land. Water connects
+     * through cell edges only (as sediment spreads at sea): a hollow touching the sea at a corner is a lake.
+     * If no water body is that large, the largest one stays ocean.
+     */
+    private void dropSmallSeas(int n, int w, int h) {
+        int minCells = (int) Math.ceil(MIN_SEA_KM2 / grid.cellAreaKm2());
+        boolean[] seen = coast; // scratch: the coast is worked out afterwards
+        java.util.Arrays.fill(seen, false);
+        int[] queue = pit; // scratch: the flood below starts with an empty pit queue
+        int largest = -1;
+        int largestSize = 0;
+        boolean kept = false;
+        for (int start = 0; start < n; start++) {
+            if (!ocean[start] || seen[start]) {
+                continue;
+            }
+            int tail = floodWater(start, queue, seen, w, h);
+            if (tail >= minCells) {
+                kept = true;
+                continue;
+            }
+            if (tail > largestSize) {
+                largestSize = tail;
+                largest = start;
+            }
+            for (int k = 0; k < tail; k++) {
+                ocean[queue[k]] = false;
+                visited[queue[k]] = false;
+            }
+        }
+        if (!kept && largest >= 0) {
+            // flood the largest body again from its first cell; it alone stays ocean
+            for (int idx = 0; idx < n; idx++) {
+                ocean[idx] = elevation[idx] <= seaLevel;
+                seen[idx] = false;
+            }
+            floodWater(largest, queue, seen, w, h);
+            for (int idx = 0; idx < n; idx++) {
+                ocean[idx] = seen[idx];
+                visited[idx] = seen[idx];
+            }
+        }
+    }
+
+    /** Collects the water cells edge-connected to {@code start} into {@code queue}; returns how many. */
+    private int floodWater(int start, int[] queue, boolean[] seen, int w, int h) {
+        int head = 0;
+        int tail = 0;
+        queue[tail++] = start;
+        seen[start] = true;
+        while (head < tail) {
+            int c = queue[head++];
+            int cj = c / w;
+            int ci = c - cj * w;
+            for (int k = 0; k < 4; k++) {
+                int nj = cj + DJ[k];
+                if (nj < 0 || nj >= h) {
+                    continue;
+                }
+                int ni = ci + DI[k];
+                ni = ni < 0 ? ni + w : ni >= w ? ni - w : ni;
+                int nb = nj * w + ni;
+                if (ocean[nb] && !seen[nb]) {
+                    seen[nb] = true;
+                    queue[tail++] = nb;
+                }
+            }
+        }
+        return tail;
     }
 
     /** Number of land cells in {@link #order}. */

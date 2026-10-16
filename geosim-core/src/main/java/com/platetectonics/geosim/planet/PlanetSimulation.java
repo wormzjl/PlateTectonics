@@ -1,6 +1,7 @@
 package com.platetectonics.geosim.planet;
 
 import com.platetectonics.geosim.climate.Climate;
+import com.platetectonics.geosim.climate.ClimateConfig;
 import com.platetectonics.geosim.climate.ClimateModel;
 import com.platetectonics.geosim.events.GeoEvent;
 import com.platetectonics.geosim.events.EventLog;
@@ -45,13 +46,22 @@ public final class PlanetSimulation {
      */
     public PlanetSimulation(CylinderGrid grid, long seed, TectonicsConfig tectonics, SurfaceConfig surfaceCfg,
                             WorldHistory.Preset preset, double meanOceanDepthM, boolean platesOnly) {
+        this(grid, seed, tectonics, surfaceCfg, ClimateConfig.defaults(), preset, meanOceanDepthM, platesOnly);
+    }
+
+    /**
+     * @param platesOnly run the Phase 2 plate engine alone, with its erosion stand-in and no climate
+     */
+    public PlanetSimulation(CylinderGrid grid, long seed, TectonicsConfig tectonics, SurfaceConfig surfaceCfg,
+                            ClimateConfig climateCfg, WorldHistory.Preset preset, double meanOceanDepthM,
+                            boolean platesOnly) {
         this.grid = grid;
         this.platesOnly = platesOnly;
         plates = new PlateSimulation(grid, seed, tectonics);
         plates.setMeanOceanDepthM(meanOceanDepthM);
         plates.setErosionStandIn(platesOnly);
         history = new WorldHistory(seed, preset, grid.size() * grid.cellAreaKm2(), plates.events());
-        climateModel = new ClimateModel(grid);
+        climateModel = new ClimateModel(grid, climateCfg);
         climate = new Climate(grid);
         surface = platesOnly ? null : new SurfaceProcesses(grid, surfaceCfg);
         aboveSea = new float[grid.size()];

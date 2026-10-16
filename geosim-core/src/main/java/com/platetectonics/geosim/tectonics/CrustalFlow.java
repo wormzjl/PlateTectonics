@@ -22,8 +22,9 @@ import java.util.Map;
  *       size thicker than a continental neighbour, which gives plateaus tapering margins a few hundred
  *       km wide.</li>
  * </ul>
- * Only buoyant crust moves; the mantle keel and eclogite stay where they are. Crust volume is conserved
- * exactly (all cells have the same area).
+ * Only buoyant crust moves; the mantle keel and eclogite stay where they are. Moving crust carries its
+ * cell's share of sediment (the column thins as a whole), so sediment never outgrows the crust it is part
+ * of. Crust and sediment volumes are conserved exactly (all cells have the same area).
  */
 final class CrustalFlow {
     private static final float EPS = 0.01f;
@@ -44,6 +45,7 @@ final class CrustalFlow {
         int plates = sim.plates.size();
         float[] ceiling = ceilings(sim);
         double[] excess = new double[plates];
+        double[] excessSediment = new double[plates];
         int[] firstSource = new int[plates];
         java.util.Arrays.fill(firstSource, -1);
         int sources = 0;
@@ -51,7 +53,10 @@ final class CrustalFlow {
             float cut = L.thick[idx] - ceiling[idx];
             if (cut > EPS && L.type[idx] == Lithosphere.CONTINENTAL) {
                 int o = L.owner[idx];
+                float sediment = cut * sedimentShare(L, idx);
                 excess[o] += cut;
+                excessSediment[o] += sediment;
+                L.sediment[idx] -= sediment;
                 L.thick[idx] = ceiling[idx];
                 if (firstSource[o] < 0) {
                     firstSource[o] = idx;
@@ -62,17 +67,23 @@ final class CrustalFlow {
         if (sources == 0) {
             return;
         }
-        fill(sim, ceiling, excess, true, false);
-        fill(sim, ceiling, excess, false, false);
+        fill(sim, ceiling, excess, excessSediment, true, false);
+        fill(sim, ceiling, excess, excessSediment, false, false);
         // a small plate that is full to the ceiling everywhere pushes into its neighbours' crust
-        fill(sim, ceiling, excess, true, true);
-        fill(sim, ceiling, excess, false, true);
+        fill(sim, ceiling, excess, excessSediment, true, true);
+        fill(sim, ceiling, excess, excessSediment, false, true);
         // nothing left anywhere within reach: the excess stays at the first source cell
         for (int o = 0; o < plates; o++) {
             if (excess[o] > EPS && firstSource[o] >= 0) {
                 L.thick[firstSource[o]] += (float) excess[o];
+                L.sediment[firstSource[o]] += (float) excessSediment[o];
             }
         }
+    }
+
+    /** Sediment's share of a cell's crust (at most 1). */
+    private static float sedimentShare(Lithosphere L, int idx) {
+        return L.thick[idx] > 0f ? Math.min(1f, L.sediment[idx] / L.thick[idx]) : 0f;
     }
 
     /** Crust thickness each cell may hold: up to the plateau (or collapse) elevation, at most maxCrustKm. */
@@ -83,9 +94,11 @@ final class CrustalFlow {
         markCompressional(sim.stepCollisions, compressional, 0.0);
         markCompressional(sim.collisionMemory, compressional, 1.0);
         float[] ceiling = sim.ceilingScratch;
+        float[] ceilingE = sim.ceilingElevationScratch;
         for (int idx = 0; idx < L.n; idx++) {
             boolean collapse = L.keel[idx] < 0f && !compressional[L.owner[idx]];
             double e = sim.seaLevelM + (collapse ? cfg.collapseElevationM() : cfg.plateauElevationM());
+            ceilingE[idx] = (float) e;
             ceiling[idx] = (float) Math.min(cfg.maxCrustKm(), Isostasy.thicknessForElevationKm(sim, idx, e));
         }
         return ceiling;
@@ -111,8 +124,8 @@ final class CrustalFlow {
      * visited cell remembers which plate's excess reached it, so with {@code anyPlate} the fill can cross
      * into neighbouring plates.
      */
-    private static void fill(PlateSimulation sim, float[] ceiling, double[] excess, boolean continentalOnly,
-                             boolean anyPlate) {
+    private static void fill(PlateSimulation sim, float[] ceiling, double[] excess, double[] excessSediment,
+                             boolean continentalOnly, boolean anyPlate) {
         Lithosphere L = sim.lith;
         int n = sim.grid.size();
         int w = sim.grid.width();
@@ -159,11 +172,14 @@ final class CrustalFlow {
                 }
                 source[nb] = o;
                 queue[tail++] = nb;
-                float room = ceiling[nb] - L.thick[nb];
+                float room = room(sim, nb, ceiling, excess[o] > EPS ? excessSediment[o] / excess[o] : 0.0);
                 if (room > 0f && excess[o] > EPS) {
                     double give = Math.min(room, excess[o]);
+                    double sediment = excessSediment[o] * give / excess[o];
                     L.thick[nb] += (float) give;
+                    L.sediment[nb] += (float) sediment;
                     excess[o] -= give;
+                    excessSediment[o] -= sediment;
                     if (L.type[nb] == Lithosphere.OCEANIC && L.thick[nb] >= threshold) {
                         L.type[nb] = Lithosphere.CONTINENTAL;
                         L.oceanAge[nb] = 0f;
@@ -175,6 +191,20 @@ final class CrustalFlow {
         for (int k = 0; k < tail; k++) {
             source[queue[k]] = -1;
         }
+    }
+
+    /**
+     * Crust cell {@code nb} can take before it reaches its ceiling. A continental cell is filled up to its
+     * ceiling elevation, allowing for the sediment share of the incoming crust (lighter, so less fits).
+     */
+    private static float room(PlateSimulation sim, int nb, float[] ceiling, double incomingShare) {
+        Lithosphere L = sim.lith;
+        if (L.type[nb] != Lithosphere.CONTINENTAL) {
+            return ceiling[nb] - L.thick[nb];
+        }
+        double perKm = (Isostasy.AIRY_FACTOR + (Isostasy.SEDIMENT_LAND_FACTOR - Isostasy.AIRY_FACTOR) * incomingShare) * 1000.0;
+        double rise = sim.ceilingElevationScratch[nb] - Isostasy.uncappedElevationM(sim, nb);
+        return (float) Math.min(rise / perKm, sim.cfg.maxCrustKm() - L.thick[nb]);
     }
 
     // ------------------------------------------------------------------ slope
@@ -218,16 +248,19 @@ final class CrustalFlow {
             if (steep == 0) {
                 continue;
             }
+            float share = sedimentShare(L, idx);
             float moved = 0f;
             for (int m = 0; m < k; m++) {
                 float d = h0 - L.thick[nb[m]] - maxStep;
                 if (d > EPS) {
                     float give = d / (steep + 1);
                     L.thick[nb[m]] += give;
+                    L.sediment[nb[m]] += give * share;
                     moved += give;
                 }
             }
             L.thick[idx] = h0 - moved;
+            L.sediment[idx] = Math.max(0f, L.sediment[idx] - moved * share);
 
             for (int m = 0; m < k; m++) {
                 int j = nb[m];

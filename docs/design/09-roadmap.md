@@ -60,6 +60,7 @@
   Every thread count writes byte-identical maps, history and events (D-5; `PlanetSimulationTest` checks 1 vs 5 threads). Per-cell loops run in parallel: the plate move copy (the largest cost, memory-bound), ocean ageing, elevations and sea level, temperature, the moisture sweeps (by row) and mixing, sea-floor sediment, weathering and the routing setup. What stays on one thread follows drainage order or shares material between cells.
 - **Faster spreading and routing (same results):** marine spreading (~27% of the main thread) and Priority-Flood routing (~23%) were the sequential bottleneck. Both still visit cells in exactly the same order, so every output stays byte-identical, but each cell costs less:
   - Marine spreading runs a breadth-first search from each river mouth, ~25,000 mouths per step at 31.25 km. 14% of mouths pass the shelf with sediment left and search the whole apron radius (~900 cells each); they cause 80% of the search work. Each queue entry now carries its distance and row, and one stamp test skips both land and visited cells.
+  - (Replaced by the ring queue of D-40, which draws round fans but costs more; see [World-model refinement](#world-model-refinement).)
   - The routing heap packs key and cell into one `long` and picks the smaller child without a branch. Ties keep the old heap's order ([02 § Determinism](02-simulation-pipeline.md#determinism-d-5)).
   - Result at 16 threads: routing 25 → 13 s and spreading 28 → 14–16 s per world; surface 68–74 → 43 s. Plates and surface now take about the same time.
 - **Tuning method:** sweeps of one JVM per variant, 6–8 at a time, at 78 km to find directions, then confirmation at 31.25 km. Erosion constants were tuned against present-day land erosion (Earth ~50 m/Myr) and continental hypsometry.
@@ -71,7 +72,7 @@
 - **Known gaps:**
   - Land is 35–39%. More ocean water lowers it only weakly and noisily (seed 99: 40% → 25% from 2,620 to 3,500 m; seed 42: ~33% throughout). `--ocean-depth` stays a world setting.
   - Standing ocean-floor sediment is 1.1–1.6 Gkm³, ~2–3× an Earth-scaled estimate. The marine flux is Earth-like but residence is ~120 Myr.
-  - 4–6% of the surface is sediment-filled ocean slivers between continental blocks (land on oceanic crust).
+  - 4–6% of the surface is sediment-filled ocean slivers between continental blocks (land on oceanic crust). *Resolved by basin closure (D-36): 0–1.5%.*
   - Land erosion at 31.25 km runs about half its value at 78 km.
   - Glaciers v0, the row-based wind and the missing climate statistics are listed in [04](04-surface-processes.md).
 
@@ -92,3 +93,34 @@ Parameter tuning is deferred (owner, 2026-10-16: "do not waste time on fine tuni
   - The Customize screen with Simulate, a progress bar and the map preview. Until it exists, the world simulates on its first start and the client waits.
   - Caves, rivers and lakes in chunks (Phase 5); strata (Phase 6).
 - O-6 is still open. The save format stores the grid size, so 15.6 km and 31.25 km planets both load.
+
+## World-model refinement
+
+Owner request (2026-10-16): "Refine the world model and parameters before further moving to the chunk gen"; chosen scope: **climate and biomes** and **coherent continents**. Owner note on sea level: it must not be fixed while plates move. It is not: the water volume is fixed and sea level floats (D-26; [04 § Sea level](04-surface-processes.md#sea-level)).
+
+- **Changes:**
+  - Basin closure (D-36).
+  - Climate refinements: temperature profile, vegetation recycling, poleward monsoon and storm-track sweeps, crest-based rain shadows, recalibrated weathering (D-37).
+  - Sediment kept inside its crust column (D-38).
+  - Small hollows below sea level are lakes, not sea (D-39).
+  - Round marine spreading with capped aprons and prograding deltas (D-40).
+- **What was wrong.** The maps showed lone white pillars over land and sea, and speckled, flooded continental platforms. Crustal flow moved crust but left its sediment, so columns carried more sediment than crust, and isostasy raised them to the elevation cap. Accretionary wedges, aprons in narrow straits and one-cell inland "seas" fed sediment into single cells without limit; once a cell sat at the cap, the cap hid the pile from erosion and it kept growing (up to 1,200 km of sediment). Breadth-first spreading drew diamond-shaped shelves and deltas.
+- **Results at 4.5 Gyr** (Earth-like preset, final code):
+
+  | Cell | Seed | Continental crust | Land | Flooded continent | Continent p50 | Ocean floor age | Desert / forest / ice (% of land) | GOE |
+  |---|---|---|---|---|---|---|---|---|
+  | 78 km | 1 | 41% | 39% | 7% | 211 m | 93 Myr | 6 / 39 / 20 | 2,060 Myr |
+  | 78 km | 5 | 36% | 33% | 12% | 117 m | 77 Myr | 6 / 44 / 13 | 2,370 Myr |
+  | 78 km | 42 | 38% | 35% | 11% | 237 m | 120 Myr | 11 / 36 / 20 | 2,150 Myr |
+  | 78 km | 99 | 40% | 40% | 6% | 243 m | 102 Myr | 7 / 36 / 21 | 1,930 Myr |
+  | 31.25 km | 42 | 43% | 42% | 6% | 177 m | 69 Myr | 9 / 42 / 21 | 2,420 Myr |
+  | 31.25 km | 1 | 46% | 43% | 8% | 246 m | 61 Myr | 14 / 35 / 21 | 1,820 Myr |
+
+  Earth: ~40% continental crust, 29% land, desert ~20 / forest ~31 / ice ~10% of land, ocean floor ~64 Myr, GOE ~2,100 Myr after formation. Cells more than 800 m above all eight neighbours fell from 463 to 81 at 78 km; those left are sediment wedges at trenches, forearc highs and thick crust at orogen edges. The thickest sediment is 27–54 km (it was 1,200+ km). Delta-plain dumping fell from 9 to 0.7–1.2 × 10⁹ km³.
+- **Cost.** A 31.25 km world takes ~3 min (plates 51 s, climate 7 s, surface 117 s; it was 1.5 min). Most of the increase is marine spreading: round fans search ~1.4× the cells of the old diamonds, and each visit costs more. Basin closure adds ~12 s to the plates. A faster apron scheme (deposit by row spans instead of searching every cell of each fan) is the obvious follow-up.
+- **Known gaps** (not in this scope):
+  - Land is 33–43%, above Earth's 29%; continental interiors stand only 120–250 m above sea level, so flat platforms flood or drain with small sea-level changes. Freeboard (cratonic buoyancy, dynamic topography) is not modelled.
+  - No ocean currents or subtropical highs: no hyper-arid desert cores, so deserts cover 6–14% of land; ice covers 13–21%.
+  - Ocean floor is still older than Earth's at 78 km (77–120 Myr); at 31.25 km it is close (61–69 Myr).
+  - Sediment piles on oceanic crust at open margins (D-31 keeps them oceanic on purpose).
+  - The RNG streams `MARGIN_SPLIT + 1` and `BREAKUP` share the value 33 (latent collision; unchanged so far).

@@ -16,6 +16,7 @@ public record TectonicsConfig(
         double erosionTimescaleMyr,
         double marginDepositFraction,
         double shelfWidthKm,
+        double enclosedOceanClosureKmPerMyr,
         // arcs and crustal growth
         double arcGrowthKmPerMyr,
         double continentalCrustKm3PerKm2,
@@ -91,6 +92,7 @@ public record TectonicsConfig(
                 200.0,   // erosionTimescaleMyr
                 0.75,    // marginDepositFraction: share of eroded crust added to shelves and basins
                 150.0,   // shelfWidthKm: eroded sediment settles on ocean floor this close to the continent
+                5.0,     // enclosedOceanClosureKmPerMyr: ocean enclosed by one plate's continent closes from the rim (D-36)
 
                 0.25,    // arcGrowthKmPerMyr: thickening rate in the arc band
                 14.1,    // continentalCrustKm3PerKm2: Earth today, 7.2e9 km3 over 5.1e8 km2

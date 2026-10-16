@@ -1,7 +1,7 @@
 # 03 · Tectonics: proto-terrain, mantle, plates, boundaries, plateaus, isostasy
 
 > **Level 1** · Read when: you work on plate motion, boundary rules, plateaus, magmatism, mantle plumes or elevation.
-> Related: [02 step order](02-simulation-pipeline.md#order-of-operations-in-one-step) · Go deeper: report § "Fifteen tectonic settings" (which settings must exist for ores) · [Tibetan plateau support notes](../research_notes/Tibetan%20plateau%20support/tibetan_plateau_support.md) (why thick crust stays high, rules R1–R9).
+> Decisions: D-21–D-26, D-32, D-36, D-38 · Related: [02 step order](02-simulation-pipeline.md#order-of-operations-in-one-step) · Go deeper: report § "Fifteen tectonic settings" (which settings must exist for ores) · [Tibetan plateau support notes](../research_notes/Tibetan%20plateau%20support/tibetan_plateau_support.md) (why thick crust stays high, rules R1–R9).
 
 **Summary.** The mantle is a **parameterized model** (plumes, supercontinent insulation), not a convection solver. Plates are rigid bodies on the cylinder whose velocities come each step from a **force balance** (slab pull, ridge push, basal drag, collision resistance). They move over one world raster by **whole-cell shifts**, which copy data exactly and never blur it. Overlaps become subduction (of normal ocean floor) or collision (of anything buoyant); gaps become new ocean crust. Collisions build **plateaus** whose height is set by crust buoyancy, dense roots that come and go, and lateral flow of the lower crust. Elevation is never stored: it comes from **isostasy** (crust thickness, roots, ocean-floor age).
 
@@ -53,6 +53,7 @@
 - **Plumes** (Poisson, 1 per 30 Myr) rise preferentially under long-lived supercontinents. They may **rift** the plate along a noisy line (900 km wiggle): 70% chance under an insulating supercontinent, 5–15% otherwise.
 - **Subduction initiation**: old ocean at a passive margin (> 160 Myr) breaks away from its continent; ocean-only plates with floor > 170 Myr break along a fracture through the oldest floor and converge (Izu–Bonin style).
 - Absorb plates below 0.2% of the area; break up the largest plate while fewer than 10 remain (at most 24).
+- **Basin closure** (D-36): ocean floor that one plate has wrapped round, touching its continent but no other plate (a rift or back-arc sliver the plate engine left behind), has no trench to close it. It closes from its rim inward at 5 km/Myr, as small basins are squeezed shut between continental blocks. Closed cells become continental crust as thick as their continental neighbours (at most 35 km) and keep their sediment. Rift oceans touch their own ridge boundary with another plate, so they are never closed. Enclosed ocean fell from 3–8% of the surface to 0–1.4%.
 
 Every boundary episode is written to the **event log** (type, time, cell, plates, value); resources ([06](06-resources.md)) read it.
 
@@ -75,23 +76,27 @@ Why Tibet stands ~5 km high and does not sink, and how the model reproduces it (
   - 55% spreads 150–300 km behind it, under the overriding plate (Tibet);
   - 10% sinks with the slab.
 - **Ceiling and lateral flow.** Gravity limits a collisional plateau to ~5.3 km above sea level. Crust above that flows to the nearest cells of the same plate, so plateaus grow **outward, flat-topped**. A cell with an eclogite root holds more crust (southern Tibet, ~75 km); one over hot mantle holds less (northern Tibet, ~60 km). Crust thicker than 50 km cannot be steeper than 0.15 km of thickness per km, so plateau margins taper over a few hundred km.
+- **Flowing crust carries its sediment** (D-38). A cell that gives crust thins as a whole column, and what moves keeps the giver's share of sediment. The ceiling allows for that share: sediment is lighter, so a sediment-rich column reaches the ceiling elevation with less crust, and a cell receiving sediment-rich crust takes less of it.
 - **Collapse.** Once a plate is no longer in a collision, its hot crust (over a removed keel) spreads down toward ~1 km elevation (Basin and Range). Cold crust keeps its height and only erodes.
 - Safety caps: crust ≤ 88 km, cell-mean elevation ≤ 6.5 km above sea level.
 
 ## Crust growth
 
 - Continents grow at arcs and by accreting arcs and plateaus. They lose crust when arc crust is subducted before it becomes buoyant, in collisions (10%), to delamination, and to **subduction erosion**: the sinking slab drags 35 km³ of the overriding plate's crust down per km of trench per Myr, taken at its trench cell (Earth: ~1.4 km³/yr over ~40,000 km of trench; von Huene & Scholl 1991; D-32). The rate is per km of trench, so the volume does not depend on cell size.
-- Erosion itself conserves mass ([04](04-surface-processes.md)). Sediment that settles on ocean floor stays oceanic and rides to a trench, where 50% is scraped into the overriding plate's wedge and the rest subducts (D-31).
+- Erosion itself conserves mass ([04](04-surface-processes.md)). Sediment that settles on ocean floor stays oceanic and rides to a trench, where 50% is scraped into the overriding plate's accretionary wedge and the rest subducts (D-31). The wedge builds up to sea level, a forearc high; what it cannot hold goes down with the slab (D-38).
 - **Growth curve.** Arc output is steered toward an Earth-like crustal growth curve: ~70% of today's volume by 1.5 Gyr (zircon-based models, Dhuime et al. 2012), and 14.1 km³ per km² of planet by 4.5 Gyr. The planet's history is chaotic, so without this seeds would differ several-fold in land area. With it they differ in **where** continents are, not **how much** continent there is. The strength is a setting (0 = off).
 - Result at 4.5 Gyr (Phase 2, plates only; seeds 42 and 7, 31 km cells): 37–40% of the surface continental, 34–35% land, 11–12 × 10⁹ km³ of continental crust, RMS plate speed ~4 cm/yr, peaks at 6.5 km.
 
 ## Isostasy and elevation
 
 ```
-continental: e = 0.1515 × (H − 33 km) − 0.013 × keel − 0.13 × eclogite      (km; keel < 0 = hot, pushes up)
-oceanic:     e = −(2.5 km + 0.35 km × √(age / Myr)), at most −6 km; + 0.1515 × (H − 7 km) for plateaus and arcs
+continental: e = 0.1515 × (H − S − 33 km) + 0.2727 × S − 0.013 × keel − 0.13 × eclogite   (km; keel < 0 = hot, pushes up)
+oceanic:     e = −(2.5 km + 0.35 km × √(age / Myr)), at most −6 km; + 0.1515 × (H − S − 7 km) for plateaus and arcs;
+             + 0.396 × S (sediment fills water)
 sea level:   the level at which the oceans hold the configured water volume (fast 1 m histogram fill)
 ```
+
+H is the whole crust and S its sediment (2.4 g/cm³ against 2.8 for crystalline crust, so sediment floats higher). **S never exceeds H** (D-38): if a process thinned the crust under its sediment, the formula would read negative crystalline crust and raise a lone pillar to the 6.5 km cap. Before D-38 that happened (crustal flow moved crust but left the sediment, and the cap hid piles of up to 1,200 km of sediment from erosion), and it was the source of the single-cell spikes on the maps.
 
 Planned: rifted-margin thermal subsidence, dynamic topography, flexure near trenches and mountain loads (forebulge, foreland basin).
 

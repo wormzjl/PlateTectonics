@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PlanetSimulationTest {
 
@@ -43,6 +44,29 @@ class PlanetSimulationTest {
             assertEquals(a.state().oxygenPal(), b.state().oxygenPal());
             assertArrayEquals(a.state().milestoneTimes(), b.state().milestoneTimes());
         }
+    }
+
+    /**
+     * Sediment is part of a column's crust, so no process may leave more sediment than crust (isostasy would
+     * read the difference as negative crystalline crust and raise a lone pillar), and no basin may pile up
+     * more than a few tens of km of it.
+     */
+    @Test
+    void sedimentStaysPartOfAPhysicalColumn() {
+        CylinderGrid grid = CylinderGrid.forPlanet(40_000.0, 256);
+        PlanetSimulation sim = planet(grid);
+        for (int step = 0; step < 150; step++) {
+            sim.step(10.0);
+        }
+        Lithosphere lith = sim.plates().lithosphere();
+        float maxSediment = 0f;
+        for (int idx = 0; idx < grid.size(); idx++) {
+            float sediment = lith.sedimentKm(idx);
+            assertTrue(sediment <= lith.thicknessKm(idx) + 1e-3f,
+                    "cell " + idx + ": " + sediment + " km sediment in " + lith.thicknessKm(idx) + " km of crust");
+            maxSediment = Math.max(maxSediment, sediment);
+        }
+        assertTrue(maxSediment < 60f, "thickest sediment " + maxSediment + " km");
     }
 
     private static PlanetSimulation planet(CylinderGrid grid) {

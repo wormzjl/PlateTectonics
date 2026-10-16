@@ -51,10 +51,21 @@ public final class SurfaceProcesses {
     private final float[] lakeEvaporation;
     private final int[] spill;
     private final boolean[] closedSpill;
+    /** Marine spreading: sea cells in the order they were taken from one mouth. */
     private final int[] queue;
-    /** Distance from the river mouth and grid row of each {@link #queue} entry. */
-    private final int[] queueDist;
-    private final int[] queueRow;
+    /**
+     * Marine spreading: queued sea cells in rings of whole cells of distance from the mouth, first come
+     * first served within a ring. A neighbour lies at most one ring further out, so two buffers hold the
+     * queue: this ring and the next (round fronts at constant cost per cell).
+     */
+    private int[] ringNow;
+    private int[] ringNext;
+    private int ringHead;
+    private int ringTail;
+    private int nextTail;
+    private int ring;
+    /** (ring + 1)²: cells closer than this (squared, in cells) belong to the current ring. */
+    private long ringLimit;
     /** Marine spreading: the mouth that last queued each ocean cell; land cells hold {@code Integer.MAX_VALUE}. */
     private final int[] stampOf;
     private final int[] apron;
@@ -96,8 +107,8 @@ public final class SurfaceProcesses {
         spill = new int[n];
         closedSpill = new boolean[n];
         queue = new int[n];
-        queueDist = new int[n];
-        queueRow = new int[n];
+        ringNow = new int[n];
+        ringNext = new int[n];
         stampOf = new int[n];
         apron = new int[n];
         pelagicScratch = new double[n];
@@ -372,80 +383,153 @@ public final class SurfaceProcesses {
 
     // ------------------------------------------------------------------ sea
 
-    /** Builds shelf, apron and delta top from one river mouth; adds to {@code totals} (deposited, of it above sea level). */
+    /**
+     * Builds shelf, apron and delta top from one river mouth; adds to {@code totals} (deposited, of it
+     * above sea level). Sea cells are taken nearest first by straight-line distance from the mouth (reached
+     * through the sea, edge to edge), so shelves and deltas grow as round fans.
+     */
     private void spreadMarine(Lithosphere lith, int mouth, double volume, double sea, double[] totals) {
         int w = grid.width();
-        int h = grid.height();
         double shelfLevel = sea - cfg.shelfDepthM();
-        int shelfCells = Math.max(1, (int) Math.round(cfg.shelfRadiusKm() / grid.cellKm()));
-        int apronCells = Math.max(shelfCells + 1, (int) Math.round(cfg.apronRadiusKm() / grid.cellKm()));
-        // breadth-first over the ocean (4 neighbours: east, west, row - 1, row + 1; this order fixes the result).
+        double shelfCells = Math.max(1.0, cfg.shelfRadiusKm() / grid.cellKm());
+        double apronCells = Math.max(shelfCells + 1.0, cfg.apronRadiusKm() / grid.cellKm());
+        long shelf2 = (long) (shelfCells * shelfCells);
+        int apronRing = (int) apronCells;
         // Land cells hold Integer.MAX_VALUE in stampOf (set in step), so one test skips land and queued cells.
         int s = ++stamp;
-        int head = 0;
-        int tail = 1;
-        int apronCount = 0;
-        queue[0] = mouth;
-        queueDist[0] = 0;
-        queueRow[0] = mouth / w;
+        int mi = mouth % w;
+        int mj = mouth / w;
+        ring = 0;
+        ringLimit = 1;
+        ringHead = 0;
+        ringTail = 0;
+        nextTail = 0;
         stampOf[mouth] = s;
-        // with no deep water in reach yet, keep looking further out before building delta plain
-        int reach = 3 * apronCells;
+        ringNow[ringTail++] = mouth;
+        int visited = 0;
+        int apronCount = 0;
+        // with no deep water in reach yet, keep looking further out before building delta top
+        int reach = 3 * apronRing;
         double left = volume;
-        while (head < tail && left > 0.0) {
-            int c = queue[head];
-            int d = queueDist[head];
-            int cj = queueRow[head];
-            head++;
-            if (d <= shelfCells) {
+        while (left > 0.0 && queued() && nextRing() <= reach) {
+            int c = ringNow[ringHead++];
+            queue[visited++] = c;
+            if (distance2(c % w, c / w, mi, mj) <= shelf2) {
                 left -= fillTo(lith, c, shelfLevel, left);
             } else if (elevation[c] < shelfLevel) {
                 apron[apronCount++] = c;
-                reach = apronCells;
+                reach = apronRing;
             }
-            if (d >= reach) {
-                continue;
-            }
-            int rowStart = cj * w;
-            int ci = c - rowStart;
-            tail = enqueue(ci + 1 == w ? rowStart : c + 1, s, d + 1, cj, tail);
-            tail = enqueue(ci == 0 ? rowStart + w - 1 : c - 1, s, d + 1, cj, tail);
-            if (cj > 0) {
-                tail = enqueue(c - w, s, d + 1, cj - 1, tail);
-            }
-            if (cj + 1 < h) {
-                tail = enqueue(c + w, s, d + 1, cj + 1, tail);
-            }
+            pushSeaNeighbours(c, s, mi, mj);
         }
         if (left > 0.0 && apronCount > 0) {
-            double km = left / apronCount / grid.cellAreaKm2();
-            for (int a = 0; a < apronCount; a++) {
-                depositKm(lith, apron[a], km);
-            }
-            left = 0.0;
+            left = fillApron(lith, apronCount, shelfLevel, left);
         }
-        // an enclosed sea already filled to shelf depth: the delta top builds to sea level, then above it
-        double top = sea - 1.0;
-        for (int q = 0; q < tail && left > 0.0; q++) {
-            left -= fillTo(lith, queue[q], top, left);
+        // a sea already filled to shelf depth: the delta top builds to sea level, prograding across the
+        // sea as far as it takes, then the delta plain rises above it
+        double topLevel = sea - 1.0;
+        for (int q = 0; q < visited && left > 0.0; q++) {
+            left -= fillTo(lith, queue[q], topLevel, left);
+        }
+        while (left > 0.0 && queued()) {
+            nextRing();
+            int c = ringNow[ringHead++];
+            queue[visited++] = c;
+            left -= fillTo(lith, c, topLevel, left);
+            pushSeaNeighbours(c, s, mi, mj);
         }
         if (left > 0.0) {
-            deposit(lith, mouth, left);
+            double km = left / visited / grid.cellAreaKm2();
+            for (int q = 0; q < visited; q++) {
+                depositKm(lith, queue[q], km);
+            }
             totals[1] += left;
         }
         totals[0] += volume;
     }
 
-    /** Queues ocean cell {@code idx} unless it is land or already queued from this mouth; returns the new tail. */
-    private int enqueue(int idx, int s, int d, int row, int tail) {
+    /** Queues the sea cells beside {@code c} not yet queued from this mouth, by their distance from it. */
+    private void pushSeaNeighbours(int c, int s, int mi, int mj) {
+        int w = grid.width();
+        int cj = c / w;
+        int rowStart = cj * w;
+        int ci = c - rowStart;
+        int east = ci + 1 == w ? 0 : ci + 1;
+        int west = ci == 0 ? w - 1 : ci - 1;
+        pushSea(rowStart + east, east, cj, s, mi, mj);
+        pushSea(rowStart + west, west, cj, s, mi, mj);
+        if (cj > 0) {
+            pushSea(c - w, ci, cj - 1, s, mi, mj);
+        }
+        if (cj + 1 < grid.height()) {
+            pushSea(c + w, ci, cj + 1, s, mi, mj);
+        }
+    }
+
+    private void pushSea(int idx, int i, int j, int s, int mi, int mj) {
         if (stampOf[idx] >= s) {
-            return tail;
+            return;
         }
         stampOf[idx] = s;
-        queue[tail] = idx;
-        queueDist[tail] = d;
-        queueRow[tail] = row;
-        return tail + 1;
+        // a cell inside the current ring (a way round a cape) joins it
+        if (distance2(i, j, mi, mj) < ringLimit) {
+            ringNow[ringTail++] = idx;
+        } else {
+            ringNext[nextTail++] = idx;
+        }
+    }
+
+    /** Squared distance in cells between (i, j) and (mi, mj), across the date line where that is shorter. */
+    private long distance2(int i, int j, int mi, int mj) {
+        int w = grid.width();
+        int di = Math.abs(i - mi);
+        di = Math.min(di, w - di);
+        long dj = j - mj;
+        return (long) di * di + dj * dj;
+    }
+
+    private boolean queued() {
+        return ringHead < ringTail || nextTail > 0;
+    }
+
+    /** Ring of the next cell to come out, moving on to the next ring when this one is used up. */
+    private int nextRing() {
+        if (ringHead == ringTail) {
+            int[] t = ringNow;
+            ringNow = ringNext;
+            ringNext = t;
+            ringHead = 0;
+            ringTail = nextTail;
+            nextTail = 0;
+            ring++;
+            ringLimit = (long) (ring + 1) * (ring + 1);
+        }
+        return ring;
+    }
+
+    /**
+     * Turbidite aprons: equal shares over the deep cells in reach, none built above {@code level} (a full
+     * cell passes its share on to the others). Returns the volume that did not fit, km3.
+     */
+    private double fillApron(Lithosphere lith, int count, double level, double left) {
+        int active = count;
+        while (left > 0.0 && active > 0) {
+            double share = left / active;
+            int stillDeep = 0;
+            for (int a = 0; a < active; a++) {
+                int c = apron[a];
+                double d = fillTo(lith, c, level, share);
+                left -= d;
+                if (d >= share) {
+                    apron[stillDeep++] = c;
+                }
+            }
+            if (stillDeep == active) {
+                return 0.0; // every cell took its full share
+            }
+            active = stillDeep;
+        }
+        return Math.max(0.0, left);
     }
 
     private double fillTo(Lithosphere lith, int idx, double level, double available) {
