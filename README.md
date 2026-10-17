@@ -33,3 +33,7 @@ CLI flags (`--help` lists all):
 - `--set CONSTANT=VALUE`: override one `TectonicsConfig` or `SurfaceConfig` constant for this run (repeatable).
 
 Output in `maps/seed_<seed>/`: elevation, plates, crust age and crust type maps; in full runs also temperature, precipitation, biome, rivers, ice, erosion, sediment and regolith maps; `timeline.gif`, `events.csv` and `history.csv` (the global state after every step).
+
+## License
+
+[MIT](LICENSE)
